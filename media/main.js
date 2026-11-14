@@ -7,7 +7,7 @@
   try { window.ompL10n?.watch(window.ompL10n.compile(JSON.parse($('l10n')?.textContent || 'null')), document.body); }
   catch (e) { console.error('l10n', e); }
   const log = $('log'), welcome = $('welcome'), input = $('input'), popup = $('popup');
-  const sendBtn = $('send'), stopBtn = $('stop'), modelBtn = $('model'), modeBtn = $('mode'), thinkBtn = $('think');
+  const sendBtn = $('send'), stopBtn = $('stop'), modelBtn = $('model'), modeBtn = $('mode');
   const ctxBox = $('ctx'), ctxLabel = $('ctxLabel'), ctxIcon = $('ctxIcon'), ctxEye = $('ctxEye');
 
   let turn = null;     // current assistant turn (everything until the next user message)
@@ -22,6 +22,7 @@
   let useContext = true;
   let contextLabel = null;
   let contextRel = null;
+  let contextFull = null;
   let pinned = [];     // files attached to every message: [{ rel, label }]
   let pending = [];    // images waiting to be sent: { mimeType, data (base64), url }
 
@@ -1052,9 +1053,12 @@
       parts.push(`5h ${r.status === 'rate-limited' ? 'full' : r.percent + '%'}`);
       tip.push(`Plan: ${r.percent}% of the 5-hour window used, ${resetsIn(r.resetsAt)}`);
     }
+    // Context fill as a small ring, like Claude Code's context indicator; the numbers are in the tooltip.
+    const ring = $('ring');
+    ring.hidden = !m.context;
     if (m.context) {
-      parts.push(Math.round(m.context.percent) + '%');
-      tip.push(`Context: ${num(m.context.tokens)} of ${num(m.context.contextWindow)} tokens`);
+      ring.style.setProperty('--p', Math.min(100, Math.round(m.context.percent)));
+      tip.unshift(`Context: ${Math.round(m.context.percent)}% (${num(m.context.tokens)} of ${num(m.context.contextWindow)} tokens)`);
     }
     if (m.free) {
       const f = freeCount(m);
@@ -1063,7 +1067,7 @@
     }
     $('meterText').textContent = parts.join(' · ');
     $('meter').title = [...tip, 'Click for usage & limits'].join('\n');
-    $('meter').hidden = !parts.length;
+    $('meter').hidden = !parts.length && !m.context;
     $('meter').classList.toggle('warn', (!!m.context && m.context.percent >= 80) || (!!r && (r.percent >= 80 || r.status === 'rate-limited')));
   }
 
@@ -1202,6 +1206,7 @@
         head.appendChild(manage);
       }
       popup.appendChild(head);
+      if (pk.kind === 'model') popup.appendChild(effortRow());
     }
     const list = el('div', 'plist');
     list.setAttribute('role', 'listbox');
@@ -1274,14 +1279,7 @@
   function updateInlinePicker() {
     const before = input.value.slice(0, input.selectionStart);
     let m = /^\/(\S*)$/.exec(input.value);
-    if (m && commands.length) {
-      const all = commands.map((c) => ({ key: c.name, label: '/' + c.name, desc: c.hint ? `${c.hint} — ${c.description}` : c.description }));
-      const manage = { key: '\u0000commands', label: 'Your commands…', icon: 'settings-gear', desc: 'create, edit or delete your own / commands' };
-      return openPicker('slash', [...all, manage], (it) => {
-        if (it === manage) { input.value = ''; autosize(); return vscode.postMessage({ type: 'commandsSheet' }); }
-        input.value = '/' + it.key + ' '; input.focus(); autosize();
-      }, m[1]);
-    }
+    if (m && commands.length) return openSlash(m[1]);
     m = /(^|\s)@([^\s@]*)$/.exec(before);
     if (m) {
       const start = before.length - m[2].length - 1;
@@ -1289,6 +1287,20 @@
       return openPicker('file', files || [], insertFile, m[2]);
     }
     if (pk && !ownFilter(pk)) hidePicker();
+  }
+  // The / list: typed at the start of the box, or from the / button (which keeps what you already typed after it).
+  function openSlash(query, fromButton) {
+    const all = commands.map((c) => ({ key: c.name, label: '/' + c.name, desc: c.hint ? `${c.hint} — ${c.description}` : c.description }));
+    const manage = { key: '\u0000commands', label: 'Your commands…', icon: 'settings-gear', desc: 'create, edit or delete your own / commands' };
+    openPicker('slash', [...all, manage], (it) => {
+      const rest = input.value.replace(/^\/\S*\s*/, '');
+      if (it === manage) { input.value = rest; autosize(); return vscode.postMessage({ type: 'commandsSheet' }); }
+      input.value = '/' + it.key + ' ' + rest;
+      input.focus();
+      input.setSelectionRange(it.key.length + 2, it.key.length + 2);
+      autosize();
+    }, query);
+    if (fromButton) input.focus(); // ↑ ↓ Enter from the box
   }
   function insertFile(it) {
     const caret = input.selectionStart;
@@ -1347,9 +1359,14 @@
   }
   function setContextOn(on) {
     useContext = on;
-    // The open file's chip: removed with ✕ (comes back when you open another file); hidden when it is pinned anyway.
-    $('ctxChip').hidden = !on || !contextLabel || pinned.some((p) => p.rel === contextRel);
-    ctxBox.hidden = $('ctxChip').hidden && !pinned.length;
+    // The open file in the toolbar, like Claude Code's footer: the eye says whether it goes with your message
+    // (click to toggle; a newly opened file is included again). Hidden when it is pinned anyway.
+    $('ctxChip').hidden = !contextLabel || pinned.some((p) => p.rel === contextRel);
+    $('ctxChip').classList.toggle('off', !on);
+    ctxIcon.className = 'codicon codicon-' + (on ? 'eye' : 'eye-closed');
+    ctxEye.title = `${contextFull || contextLabel || ''}\n${on ? 'Sent with your next message. Click to leave it out.' : 'Not sent. Click to include it.'}`;
+    ctxEye.setAttribute('aria-pressed', String(on));
+    ctxBox.hidden = !pinned.length;
   }
   function renderPinned() {
     const box = $('pinned');
@@ -1402,18 +1419,16 @@
   const MODES = [
     { key: 'always-ask', short: 'Ask', label: 'Ask before edits', icon: 'shield', desc: 'asks before every file change and command' },
     { key: 'always-ask-cached', short: 'Ask, remember', label: 'Ask & remember', icon: 'shield', desc: 'like Ask, and you can approve a file or folder for the session' },
-    { key: 'write', short: 'Auto edits', label: 'Auto-approve edits', icon: 'edit', desc: 'edits files freely, asks before commands' },
+    { key: 'write', short: 'Edit auto', label: 'Edit automatically', icon: 'run-all', desc: 'edits files freely, asks before commands' },
     { key: 'yolo', short: 'Full auto', label: 'Full auto', icon: 'zap', desc: 'never asks' },
-    { key: 'plan', short: 'Plan', label: 'Plan (read-only)', icon: 'checklist', desc: 'reads and writes a plan, changes nothing' },
+    { key: 'plan', short: 'Plan', label: 'Plan mode', icon: 'debug-pause', desc: 'reads and writes a plan, changes nothing' },
   ];
-  const LEVELS = [
-    { key: '', label: 'Default', desc: "the model's own setting" },
-    { key: 'off', label: 'Off', desc: 'no reasoning: fastest and cheapest' },
-    { key: 'minimal', label: 'Minimal', desc: '' }, { key: 'low', label: 'Low', desc: '' }, { key: 'medium', label: 'Medium', desc: '' },
-    { key: 'high', label: 'High', desc: 'for harder problems' }, { key: 'xhigh', label: 'Extra high', desc: '' },
-    { key: 'max', label: 'Max', desc: 'slowest, most thorough' },
-  ];
-  let mode = 'always-ask', think = '';
+  // Effort (thinking), as in Claude Code's model picker: always on, high by default. minimal / xhigh are settings-only
+  // and show up in the row only while in use.
+  const EFFORTS = ['low', 'medium', 'high', 'max'];
+  const EFFORT_TIPS = { minimal: 'Fastest, least thinking', low: 'Quick answers, light thinking', medium: 'Balanced',
+    high: 'Thinks carefully (default)', xhigh: 'Thinks longer than high', max: 'Slowest, most thorough' };
+  let mode = 'always-ask', think = 'high';
   function showMode(v) {
     const m = MODES.find((x) => x.key === v) || MODES[0];
     mode = m.key;
@@ -1423,11 +1438,26 @@
     modeBtn.dataset.mode = m.key; // Full auto and Plan are coloured, so you notice them
   }
   function showThink(v) {
-    const l = LEVELS.find((x) => x.key === v) || LEVELS[0];
-    think = l.key;
-    $('thinkLabel').textContent = l.key ? l.label : ''; // default: just the bulb
-    thinkBtn.title = `Thinking: ${l.label}${l.desc ? ` (${l.desc})` : ''}`;
-    thinkBtn.classList.toggle('on', !!l.key && l.key !== 'off');
+    think = EFFORT_TIPS[v] ? v : 'high';
+    $('effort').textContent = ` · ${think}`; // "deepseek-v4-flash · high", like "Sonnet · high"
+  }
+  function setThink(v) { showThink(v); vscode.postMessage({ type: 'setThinking', level: think }); }
+  // The Effort row at the top of the model picker.
+  function effortRow() {
+    const row = el('div', 'peffort');
+    row.appendChild(el('span', 'elabel', 'Effort'));
+    const seg = el('div', 'segs');
+    seg.setAttribute('role', 'radiogroup');
+    for (const k of EFFORTS.includes(think) ? EFFORTS : [...EFFORTS, think]) {
+      const b = el('button', 'seg' + (k === think ? ' on' : ''), k);
+      b.title = EFFORT_TIPS[k];
+      b.setAttribute('role', 'radio');
+      b.setAttribute('aria-checked', String(k === think));
+      b.onmousedown = (e) => { e.preventDefault(); setThink(k); renderPicker(); }; // the filter keeps the focus
+      seg.appendChild(b);
+    }
+    row.appendChild(seg);
+    return row;
   }
   function setMode(v) { showMode(v); vscode.postMessage({ type: 'setMode', mode }); }
   // A short list in the popup; ↑ ↓ Enter work from the message box, which keeps the focus.
@@ -1438,12 +1468,12 @@
     renderPicker();
     input.focus();
   }
-  for (const b of [modeBtn, thinkBtn, modelBtn]) b.onmousedown = (e) => e.preventDefault(); // keep the caret in the box
+  for (const b of [modeBtn, modelBtn, $('slash'), $('attach')]) b.onmousedown = (e) => e.preventDefault(); // keep the caret in the box
   modeBtn.onclick = () => openChoices('mode', MODES, mode, setMode);
-  thinkBtn.onclick = () => openChoices('think', LEVELS, think, (v) => { showThink(v); vscode.postMessage({ type: 'setThinking', level: v }); });
+  $('slash').onclick = () => (pk?.kind === 'slash' ? hidePicker() : openSlash('', true));
   showMode(mode);
   showThink(think);
-  ctxEye.onclick = () => setContextOn(false);
+  ctxEye.onclick = () => setContextOn(!useContext);
   $('ctxPin').onclick = () => contextRel && vscode.postMessage({ type: 'pinFile', rel: contextRel });
   $('attach').onclick = () => {
     const p = input.selectionStart;
@@ -1721,13 +1751,12 @@
       case 'context':
         if (m.label !== contextLabel) useContext = true;
         contextLabel = m.label;
+        contextFull = m.full || m.label;
         contextRel = m.rel || null;
         pinned = m.pinned || [];
         renderPinned();
-        setContextOn(useContext);
         ctxLabel.textContent = m.label || '';
-        $('ctxChip').title = `${m.full || m.label || ''}\nSent with your next message.`;
-        ctxIcon.className = 'codicon codicon-' + (m.selection ? 'selection' : 'file');
+        setContextOn(useContext);
         break;
       case 'files':
         files = [

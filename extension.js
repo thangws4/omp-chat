@@ -68,7 +68,11 @@ const STATUS_UI = {
   done: { title: '🔵 done', badge: 'OMP Chat finished while you were away', bar: '$(check) OMP: done' },
   idle: { title: '', badge: null, bar: '' },
 };
-const STATUS_RANK = { blocked: 3, working: 2, done: 1, idle: 0 };
+// Thinking effort, as Claude Code's "Effort": always on, high unless you pick another. Older settings ("" = omp's
+// default, "off") count as high.
+const EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const thinkingLevel = (cfg) => (EFFORTS.includes(cfg.get('thinkingLevel')) ? cfg.get('thinkingLevel') : 'high');
+const STATUS_RANK ={ blocked: 3, working: 2, done: 1, idle: 0 };
 const STATUS_ICON = { blocked: '$(bell-dot)', working: '$(sync~spin)', done: '$(check)', idle: '$(circle-outline)' };
 const TAB_TYPE = 'ompChat.tab';
 
@@ -562,7 +566,7 @@ class ChatProvider {
   sync() {
     this.post({ type: 'mode', mode: vscode.workspace.getConfiguration('ompChat').get('approvalMode') });
     this.post({ type: 'model', name: this.modelName || vscode.workspace.getConfiguration('ompChat').get('model') });
-    this.post({ type: 'thinking_level', level: vscode.workspace.getConfiguration('ompChat').get('thinkingLevel') || '' });
+    this.post({ type: 'thinking_level', level: thinkingLevel(vscode.workspace.getConfiguration('ompChat')) });
     this.post({ type: 'commands', list: this.commands });
     this.postContext();
     this.postSession();
@@ -591,7 +595,8 @@ class ChatProvider {
       case 'insertCode': return this.insertCode(String(m.code ?? ''));
       case 'newFileFromCode': return this.newFileFromCode(String(m.code ?? ''), String(m.lang || ''));
       case 'setThinking':
-        return vscode.workspace.getConfiguration('ompChat').update('thinkingLevel', String(m.level || ''), vscode.ConfigurationTarget.Global);
+        if (!EFFORTS.includes(m.level)) return;
+        return vscode.workspace.getConfiguration('ompChat').update('thinkingLevel', m.level, vscode.ConfigurationTarget.Global);
       case 'usage': return this.showUsage();
       case 'setApiKey': return this.manageKeys();
       case 'addKey': return this.addKeyForm(false, m.provider);
@@ -661,8 +666,7 @@ class ChatProvider {
 
     // Plan mode is OMP Chat's own (omp's /plan is terminal-only): omp asks for every edit/command and we deny them.
     const mode = cfg.get('approvalMode') === 'plan' ? 'always-ask' : cfg.get('approvalMode');
-    const think = cfg.get('thinkingLevel');
-    const args = ['--mode', 'rpc', '--model', cfg.get('model'), ...(mode ? ['--approval-mode', mode] : []), ...(think ? [`--thinking=${think}`] : []),
+    const args = ['--mode', 'rpc', '--model', cfg.get('model'), ...(mode ? ['--approval-mode', mode] : []), `--thinking=${thinkingLevel(cfg)}`,
       ...(cfg.get('announceSteps', true) ? [`--append-system-prompt=${ANNOUNCE_STEPS}`] : []), // a later one in extraArgs wins
       ...this.overlayArgs(), ...cfg.get('extraArgs', [])];
     const ompPath = cfg.get('ompPath') || 'omp';
@@ -1772,15 +1776,12 @@ class ChatProvider {
     this.post({ type: 'mode', mode: cfg.get('approvalMode') });
     if (RESTART_KEYS.some((k) => e.affectsConfiguration('ompChat.' + k))) return this.restart();
     if (e.affectsConfiguration('ompChat.thinkingLevel')) {
-      const level = cfg.get('thinkingLevel') || '';
+      const level = thinkingLevel(cfg);
       this.post({ type: 'thinking_level', level });
       if (!this.client) return; // the next start passes --thinking
-      // Changed inside the running omp, so the conversation carries on; "" goes back to omp's own default.
-      try { await this.client.request({ type: 'set_thinking_level', level: level || 'inherit' }); }
-      catch (err) {
-        if (!level) return this.restart();
-        this.post({ type: 'error', text: `Could not set the thinking level to ${level}: ${err.message}` });
-      }
+      // Changed inside the running omp, so the conversation carries on.
+      try { await this.client.request({ type: 'set_thinking_level', level }); }
+      catch (err) { this.post({ type: 'error', text: `Could not set the thinking level to ${level}: ${err.message}` }); }
       return;
     }
     if (e.affectsConfiguration('ompChat.model') && this.quietModel === cfg.get('model')) { this.quietModel = null; return; } // addKeyForm restarts
@@ -2047,27 +2048,25 @@ class ChatProvider {
   <div id="todos" hidden></div>
   <div id="queue" hidden></div>
   <div id="box">
-    <div id="ctx" hidden>
-      <div id="ctxChip" class="chip" title="Sent with your next message.">
-        <span id="ctxIcon" class="codicon codicon-file"></span><span id="ctxLabel"></span><button id="ctxPin" class="ctxx" title="Keep this file attached to every message"><span class="codicon codicon-pin"></span></button><button id="ctxEye" class="ctxx" title="Remove: don't send this file"><span class="codicon codicon-close"></span></button>
-      </div>
-      <span id="pinned"></span>
-    </div>
+    <div id="ctx" hidden><span id="pinned"></span></div>
     <div id="thumbs" hidden></div>
     <div id="shellHint" hidden><span class="codicon codicon-terminal"></span>Shell command: runs in the workspace, and the output joins the conversation</div>
     <div id="memHint" hidden><span class="codicon codicon-bookmark"></span>Memory: saved to the project's AGENTS.md, so the agent remembers it in every chat</div>
     <textarea id="input" rows="1" placeholder="Ask OMP, / for commands, ! to run a shell command"></textarea>
+    <!-- Laid out like Claude Code's prompt box: mode and the open file on the left; context, model · effort,
+         commands, mentions and send on the right. -->
     <div id="tools">
+      <button id="mode" class="pill" title="When OMP must ask before running tools (Shift+Tab)" aria-haspopup="listbox"><span id="modeIcon" class="codicon codicon-shield"></span><span id="modeLabel" class="plabel"></span></button>
+      <span id="ctxChip" hidden><button id="ctxEye" class="pill"><span id="ctxIcon" class="codicon codicon-eye"></span><span id="ctxLabel" class="plabel"></span></button><button id="ctxPin" class="icon" title="Keep this file attached to every message"><span class="codicon codicon-pin"></span></button></span>
+      <span class="spacer"></span>
+      <button id="meter" class="pill" title="Usage &amp; limits" hidden><span id="ring" class="ring"></span><span id="meterText"></span></button>
+      <button id="model" class="pill" title="Model and effort" aria-haspopup="listbox"><span id="modelName"></span><span id="effort"></span></button>
+      <button id="slash" class="icon" title="Commands (/)"><span class="glyph">/</span></button>
       <button id="attach" class="icon" title="Mention a file (@)"><span class="codicon codicon-mention"></span></button>
       <button id="addImage" class="icon" title="Attach images (or paste / drop them)"><span class="codicon codicon-file-media"></span></button>
       <input id="imageFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
-      <button id="mode" class="pill" title="When OMP must ask before running tools (Shift+Tab)" aria-haspopup="listbox"><span id="modeIcon" class="codicon codicon-shield"></span><span id="modeLabel" class="plabel"></span></button>
-      <button id="think" class="pill" title="How much the model thinks before answering (models without reasoning ignore it)" aria-haspopup="listbox"><span class="codicon codicon-lightbulb"></span><span id="thinkLabel" class="plabel"></span></button>
-      <span class="spacer"></span>
-      <button id="meter" class="pill" title="Usage &amp; limits" hidden><span class="codicon codicon-dashboard"></span><span id="meterText"></span></button>
-      <button id="model" class="pill" title="Change model" aria-haspopup="listbox"><span class="codicon codicon-sparkle"></span><span id="modelName"></span></button>
-      <button id="stop" class="icon send" hidden title="Stop (the agent keeps what it did so far)"><span class="codicon codicon-debug-stop"></span></button>
-      <button id="send" class="icon send" title="Send (Enter)"><span class="codicon codicon-send"></span></button>
+      <button id="stop" class="icon send" hidden title="Stop (the agent keeps what it did so far)"><span class="codicon codicon-primitive-square"></span></button>
+      <button id="send" class="icon send" title="Send (Enter)"><span class="codicon codicon-arrow-up"></span></button>
     </div>
   </div>
 </div>

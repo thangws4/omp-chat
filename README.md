@@ -91,10 +91,12 @@ While the agent is working, a new message is **queued**: it waits above the box,
 
 When the agent keeps a to-do list, it is pinned above the box (**Todos 2/5**): ✓ done, ⟳ in progress, ○ to do. Click the header to fold it.
 
+The bar under the box is laid out like Claude Code's: on the left the approval mode and the open file; on the right the context ring, the model with its effort (`deepseek-v4-flash · high`), `/` for commands, `@` to mention a file, and send. In a narrow sidebar the labels fold into icons; their tooltips still say everything.
+
 | In the message box | What it does |
 |---|---|
-| File chip (📄 `calc.py`) above the box | The open file is sent with your message. If you select code, the chip shows the line range and the selected code is sent. Click ✕ on the chip to leave it out; it comes back when you open another file or select code |
-| 📌 on the file chip | Keeps that file attached to every message, even after you switch files. Pinned files show as their own chips; ✕ removes one. Also: right-click a file in the Explorer (or an editor tab) → **Add File to OMP Chat** |
+| 👁 file name in the bar | The open file is sent with your message. If you select code, it shows the line range and the selected code is sent. Click it to leave the file out (struck through) or put it back; a newly opened file is included again |
+| 📌 next to the file name (on hover) | Keeps that file attached to every message, even after you switch files. Pinned files show as their own chips; ✕ removes one. Also: right-click a file in the Explorer (or an editor tab) → **Add File to OMP Chat** |
 | `@` | Lists workspace files as you type (`@cal…`). **↑ ↓** to move, **Enter** or **Tab** to insert, **Esc** to close. The `@` button does the same |
 | `@problems` | Sends the errors and warnings from VS Code's **Problems** panel with your message |
 | `@terminal` | Sends the recent output of the active terminal (copied through the clipboard, which is put back afterwards) |
@@ -171,7 +173,7 @@ omp can hand parts of a job to **subagents** (its `task` tool): helpers with the
 
 ### Models
 
-Click the model name in the toolbar to open the model list. Type to filter (`free`, `deepseek`, `kimi`…). Badges say **free**, **Go plan** (needs the OpenCode Go subscription) or **used up** (free allowance spent, with the time until it resets).
+Click the model name in the toolbar to open the model list. Its **Effort** row sets how much the model thinks before answering: `low`, `medium`, `high` (the default) or `max`, as in Claude Code; the choice shows after the model name and applies to the running conversation. Models without reasoning ignore it. Type to filter (`free`, `deepseek`, `kimi`…). Badges say **free**, **Go plan** (needs the OpenCode Go subscription) or **used up** (free allowance spent, with the time until it resets).
 
 **Your models**: the model list in the chat shows only your models (★) plus the one in use. **Manage models…** (last entry of that list, or **…** → **Manage Models…**) shows every model omp can run, with a filter (try `free`, `deepseek`, `kimi`): click ☆ to add a model to your models, **Use** to switch to it. Your models sit on top, where ↑ ↓ set their order and ✕ removes one. Your models are kept across workspaces.
 
@@ -232,7 +234,7 @@ When a request fails because a limit or credit ran out (HTTP 429 / 402, "rate li
 
 ### Usage & limits
 
-Open it with the 📊 button in the title bar or the gauge in the toolbar (`5h 37% · 10%`).
+Open it with the 📊 button in the title bar or the context ring in the toolbar (with the OpenCode Go plan it also shows `5h 37%`; hover for the numbers).
 
 | Section | Shows |
 |---|---|
@@ -297,7 +299,7 @@ Type `/` to see everything available on your machine.
 | Setting | Default | |
 |---|---|---|
 | `ompChat.model` | `openrouter/baidu/ernie-5.5-flash-preview:free` | Model as `provider/model`; the model picker writes this |
-| `ompChat.thinkingLevel` | *(empty)* | How much the model thinks: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; empty is omp's default. Also the **Thinking** list in the toolbar; it applies to the running conversation |
+| `ompChat.thinkingLevel` | `high` | Effort: `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. Also the **Effort** row of the model list; it applies to the running conversation |
 | `ompChat.notifications` | `true` | Notify when a chat needs you or finishes while you are elsewhere |
 | `ompChat.announceSteps` | `true` | The agent says what it is about to do before it uses tools, gives short updates while it works and sums up at the end, as in Claude Code (added to omp's system prompt; a `--append-system-prompt` in `extraArgs` replaces it) |
 | `ompChat.approvalMode` | `always-ask` | `always-ask`, `always-ask-cached`, `write`, `yolo` or `plan` (the toolbar modes above) |

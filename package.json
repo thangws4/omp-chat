@@ -2,7 +2,7 @@
   "name": "omp-chat",
   "displayName": "OMP Chat by DT",
   "description": "AI coding chat panel for VS Code, powered by the oh-my-pi (omp) agent and OpenRouter / DeepSeek models.",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "publisher": "dtcode-dev",
   "icon": "media/logo.png",
   "engines": {
@@ -299,8 +299,6 @@
         "ompChat.thinkingLevel": {
           "type": "string",
           "enum": [
-            "",
-            "off",
             "minimal",
             "low",
             "medium",
@@ -308,7 +306,7 @@
             "xhigh",
             "max"
           ],
-          "default": "",
+          "default": "high",
           "description": "%config.thinkingLevel%"
         },
         "ompChat.announceSteps": {

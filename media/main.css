@@ -368,16 +368,13 @@ textarea.cinput { font-family: var(--vscode-editor-font-family); }
 #ctx { padding: 6px 6px 0; }
 #ctx[hidden] { display: none; }
 #ctx .chip { font-size: .85em; max-width: 100%; background: transparent; }
-#ctxLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #ctx { display: flex; flex-wrap: wrap; gap: 4px; }
-#ctxChip[hidden] { display: none; }
 #pinned { display: contents; }
 .pinchip { font-size: .85em; max-width: 100%; }
 .pinchip .plabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tfoot { display: flex; align-items: center; gap: 8px; margin: 2px 0 0 22px; color: var(--vscode-descriptionForeground); font-size: .85em; opacity: .75; }
 .turn.bot:hover .tfoot, .tfoot:focus-within { opacity: 1; }
 .ctxx { display: inline-flex; padding: 0; margin-right: -4px; border-radius: 4px; opacity: .7; }
-#ctxPin { margin-right: 0; }
 .ctxx:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
 .ctxx .codicon { font-size: 12px; }
 textarea {
@@ -394,15 +391,46 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 /* modes you should notice: Full auto never asks, Plan changes nothing */
 #mode[data-mode="yolo"] { color: var(--vscode-editorWarning-foreground, #cca700); }
 #mode[data-mode="plan"] { color: var(--vscode-textLink-foreground); }
-#think.on .codicon { color: var(--vscode-editorWarning-foreground, #cca700); }
-/* toolbar: icons, mode, thinking and the meter keep their size; the model name shrinks with an ellipsis */
-#tools button.icon, #meter, #mode, #think { flex: none; }
-#model { flex: 0 1 auto; max-width: 45%; }
+/* the open file, with its eye: struck through when it is left out */
+#ctxChip { display: inline-flex; align-items: center; min-width: 0; flex: 0 6 auto; max-width: 32%; } /* gives way before the model name */
+#ctxChip[hidden] { display: none; }
+#ctxEye { min-width: 0; }
+#ctxLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#ctxChip.off #ctxLabel { text-decoration: line-through; opacity: .7; }
+#ctxPin { opacity: 0; padding: 2px; }
+#ctxChip:hover #ctxPin, #ctxPin:focus-visible { opacity: .8; }
+#ctxPin .codicon { font-size: 12px; }
+/* context fill ring */
+.ring { --p: 0; width: 12px; height: 12px; border-radius: 50%; flex: none;
+  background: conic-gradient(var(--vscode-descriptionForeground) calc(var(--p) * 1%), var(--vscode-widget-border, rgba(128,128,128,.35)) 0);
+  -webkit-mask: radial-gradient(circle, transparent 3px, #000 3.5px); mask: radial-gradient(circle, transparent 3px, #000 3.5px); }
+.ring[hidden] { display: none; }
+#meter.warn .ring { background: conic-gradient(var(--vscode-editorWarning-foreground, #cca700) calc(var(--p) * 1%), var(--vscode-widget-border, rgba(128,128,128,.35)) 0); }
+#meterText:empty { display: none; }
+#effort { flex: none; opacity: .8; }
+#slash .glyph { font-weight: 600; width: 16px; text-align: center; line-height: 16px; }
+/* toolbar: icons, mode and the meter keep their size; the file and the model name shrink with an ellipsis */
+#tools button.icon, #meter, #mode { flex: none; }
+#model { flex: 0 1 auto; max-width: 50%; }
 #modelName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* a narrow sidebar: mode and thinking become icons (their tooltips still say which) */
-@container (max-width: 360px) { #mode .plabel, #think .plabel, #meterText { display: none; } }
-button.send { color: var(--vscode-button-background); }
-button.send .codicon { font-size: 16px; }
+/* narrower sidebars give up the extras first; their tooltips still say everything */
+@container (max-width: 440px) { #addImage, #meterText { display: none; } }
+@container (max-width: 380px) { #mode .plabel { display: none; } }
+@container (max-width: 300px) { #ctxChip { display: none; } }
+/* Effort row in the model picker, like Claude Code's */
+#popup .peffort { display: flex; align-items: center; gap: 8px; padding: 4px 8px 6px; border-bottom: 1px solid var(--vscode-editorSuggestWidget-border, transparent); flex: none; }
+#popup .elabel { font-size: .85em; color: var(--vscode-descriptionForeground); }
+#popup .segs { display: inline-flex; border: 1px solid var(--vscode-widget-border, rgba(128,128,128,.35)); border-radius: 4px; overflow: hidden; }
+#popup .seg { padding: 1px 8px; font-size: .85em; border-radius: 0; color: var(--vscode-foreground); }
+#popup .seg + .seg { border-left: 1px solid var(--vscode-widget-border, rgba(128,128,128,.35)); }
+#popup .seg:hover { background: var(--vscode-toolbar-hoverBackground); }
+#popup .seg.on { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+/* send / stop: a filled round button at the end, like Claude Code's */
+#tools button.send { width: 24px; height: 24px; margin-left: 4px; padding: 0; border-radius: 50%;
+  background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+#tools button.send:hover:not(:disabled) { background: var(--vscode-button-hoverBackground); }
+#tools button.send[hidden] { display: none; }
+button.send .codicon { font-size: 14px; }
 
 #popup {
   position: absolute; left: 10px; right: 10px; bottom: calc(100% - 6px); max-height: 240px; overflow-y: auto; border-radius: 6px;
