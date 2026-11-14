@@ -386,19 +386,21 @@ textarea {
   background: transparent; color: var(--vscode-input-foreground); font-family: inherit; font-size: inherit;
 }
 textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
-#tools { display: flex; align-items: center; gap: 2px; padding: 2px 4px 4px; }
-#tools select {
-  max-width: 45%; background: transparent; color: var(--vscode-descriptionForeground); border: none; border-radius: 4px;
-  font: inherit; font-size: .9em; padding: 2px; cursor: pointer;
-}
-#tools select:hover { background: var(--vscode-toolbar-hoverBackground); }
-#tools select option { background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); }
-.pill { display: inline-flex; align-items: center; gap: 2px; font-size: .9em; color: var(--vscode-descriptionForeground); padding: 2px 4px; white-space: nowrap; min-width: 0; }
-/* toolbar: icons and the meter keep their size; model name and mode shrink with an ellipsis */
-#tools button.icon, #meter { flex: none; }
-#model { flex: 0 1 auto; max-width: 42%; }
-#tools select { flex: 0 1 auto; min-width: 0; }
+#tools { display: flex; align-items: center; gap: 2px; padding: 2px 4px 4px; container-type: inline-size; }
+.pill { display: inline-flex; align-items: center; gap: 3px; font-size: .9em; color: var(--vscode-descriptionForeground); padding: 2px 5px; white-space: nowrap; min-width: 0; border-radius: 4px; }
+.pill:hover { background: var(--vscode-toolbar-hoverBackground); color: var(--vscode-foreground); }
+.pill .codicon { font-size: 14px; flex: none; }
+.pill .plabel:empty { display: none; }
+/* modes you should notice: Full auto never asks, Plan changes nothing */
+#mode[data-mode="yolo"] { color: var(--vscode-editorWarning-foreground, #cca700); }
+#mode[data-mode="plan"] { color: var(--vscode-textLink-foreground); }
+#think.on .codicon { color: var(--vscode-editorWarning-foreground, #cca700); }
+/* toolbar: icons, mode, thinking and the meter keep their size; the model name shrinks with an ellipsis */
+#tools button.icon, #meter, #mode, #think { flex: none; }
+#model { flex: 0 1 auto; max-width: 45%; }
 #modelName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* a narrow sidebar: mode and thinking become icons (their tooltips still say which) */
+@container (max-width: 360px) { #mode .plabel, #think .plabel, #meterText { display: none; } }
 button.send { color: var(--vscode-button-background); }
 button.send .codicon { font-size: 16px; }
 

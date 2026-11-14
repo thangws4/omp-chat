@@ -2061,26 +2061,11 @@ class ChatProvider {
       <button id="attach" class="icon" title="Mention a file (@)"><span class="codicon codicon-mention"></span></button>
       <button id="addImage" class="icon" title="Attach images (or paste / drop them)"><span class="codicon codicon-file-media"></span></button>
       <input id="imageFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
-      <select id="mode" title="When OMP must ask before running tools">
-        <option value="always-ask">Ask before edits</option>
-        <option value="always-ask-cached">Ask &amp; remember</option>
-        <option value="write">Auto-approve edits</option>
-        <option value="yolo">Full auto</option>
-        <option value="plan">Plan (read-only)</option>
-      </select>
-      <select id="think" title="How much the model thinks before answering (models without reasoning ignore it)">
-        <option value="">Thinking: default</option>
-        <option value="off">Thinking: off</option>
-        <option value="minimal">Thinking: minimal</option>
-        <option value="low">Thinking: low</option>
-        <option value="medium">Thinking: medium</option>
-        <option value="high">Thinking: high</option>
-        <option value="xhigh">Thinking: xhigh</option>
-        <option value="max">Thinking: max</option>
-      </select>
+      <button id="mode" class="pill" title="When OMP must ask before running tools (Shift+Tab)" aria-haspopup="listbox"><span id="modeIcon" class="codicon codicon-shield"></span><span id="modeLabel" class="plabel"></span></button>
+      <button id="think" class="pill" title="How much the model thinks before answering (models without reasoning ignore it)" aria-haspopup="listbox"><span class="codicon codicon-lightbulb"></span><span id="thinkLabel" class="plabel"></span></button>
       <span class="spacer"></span>
       <button id="meter" class="pill" title="Usage &amp; limits" hidden><span class="codicon codicon-dashboard"></span><span id="meterText"></span></button>
-      <button id="model" class="pill" title="Change model"><span id="modelName"></span><span class="codicon codicon-chevron-down"></span></button>
+      <button id="model" class="pill" title="Change model" aria-haspopup="listbox"><span class="codicon codicon-sparkle"></span><span id="modelName"></span></button>
       <button id="stop" class="icon send" hidden title="Stop (the agent keeps what it did so far)"><span class="codicon codicon-debug-stop"></span></button>
       <button id="send" class="icon send" title="Send (Enter)"><span class="codicon codicon-send"></span></button>
     </div>

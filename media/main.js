@@ -7,7 +7,7 @@
   try { window.ompL10n?.watch(window.ompL10n.compile(JSON.parse($('l10n')?.textContent || 'null')), document.body); }
   catch (e) { console.error('l10n', e); }
   const log = $('log'), welcome = $('welcome'), input = $('input'), popup = $('popup');
-  const sendBtn = $('send'), stopBtn = $('stop'), modelBtn = $('model'), modeSel = $('mode');
+  const sendBtn = $('send'), stopBtn = $('stop'), modelBtn = $('model'), modeBtn = $('mode'), thinkBtn = $('think');
   const ctxBox = $('ctx'), ctxLabel = $('ctxLabel'), ctxIcon = $('ctxIcon'), ctxEye = $('ctxEye');
 
   let turn = null;     // current assistant turn (everything until the next user message)
@@ -1397,8 +1397,52 @@
   stopBtn.onclick = () => vscode.postMessage({ type: 'stop' });
   modelBtn.onclick = () => (pk?.kind === 'model' ? hidePicker() : vscode.postMessage({ type: 'pickModel' }));
   $('meter').onclick = () => vscode.postMessage({ type: 'usage' });
-  modeSel.onchange = () => vscode.postMessage({ type: 'setMode', mode: modeSel.value });
-  $('think').onchange = () => vscode.postMessage({ type: 'setThinking', level: $('think').value });
+  // Approval mode and thinking level: compact pills that open a list in the popup (native <select>s are as wide as
+  // their longest option, which does not fit a narrow sidebar).
+  const MODES = [
+    { key: 'always-ask', short: 'Ask', label: 'Ask before edits', icon: 'shield', desc: 'asks before every file change and command' },
+    { key: 'always-ask-cached', short: 'Ask, remember', label: 'Ask & remember', icon: 'shield', desc: 'like Ask, and you can approve a file or folder for the session' },
+    { key: 'write', short: 'Auto edits', label: 'Auto-approve edits', icon: 'edit', desc: 'edits files freely, asks before commands' },
+    { key: 'yolo', short: 'Full auto', label: 'Full auto', icon: 'zap', desc: 'never asks' },
+    { key: 'plan', short: 'Plan', label: 'Plan (read-only)', icon: 'checklist', desc: 'reads and writes a plan, changes nothing' },
+  ];
+  const LEVELS = [
+    { key: '', label: 'Default', desc: "the model's own setting" },
+    { key: 'off', label: 'Off', desc: 'no reasoning: fastest and cheapest' },
+    { key: 'minimal', label: 'Minimal', desc: '' }, { key: 'low', label: 'Low', desc: '' }, { key: 'medium', label: 'Medium', desc: '' },
+    { key: 'high', label: 'High', desc: 'for harder problems' }, { key: 'xhigh', label: 'Extra high', desc: '' },
+    { key: 'max', label: 'Max', desc: 'slowest, most thorough' },
+  ];
+  let mode = 'always-ask', think = '';
+  function showMode(v) {
+    const m = MODES.find((x) => x.key === v) || MODES[0];
+    mode = m.key;
+    $('modeIcon').className = `codicon codicon-${m.icon}`;
+    $('modeLabel').textContent = m.short;
+    modeBtn.title = `${m.label}: ${m.desc} (Shift+Tab)`;
+    modeBtn.dataset.mode = m.key; // Full auto and Plan are coloured, so you notice them
+  }
+  function showThink(v) {
+    const l = LEVELS.find((x) => x.key === v) || LEVELS[0];
+    think = l.key;
+    $('thinkLabel').textContent = l.key ? l.label : ''; // default: just the bulb
+    thinkBtn.title = `Thinking: ${l.label}${l.desc ? ` (${l.desc})` : ''}`;
+    thinkBtn.classList.toggle('on', !!l.key && l.key !== 'off');
+  }
+  function setMode(v) { showMode(v); vscode.postMessage({ type: 'setMode', mode }); }
+  // A short list in the popup; ↑ ↓ Enter work from the message box, which keeps the focus.
+  function openChoices(kind, list, cur, choose) {
+    if (pk?.kind === kind) return hidePicker();
+    openPicker(kind, list.map((x) => ({ key: x.key, label: x.label, desc: x.desc, icon: x.key === cur ? 'check' : x.icon || 'blank' })), (it) => choose(it.key));
+    pk.active = Math.max(0, list.findIndex((x) => x.key === cur));
+    renderPicker();
+    input.focus();
+  }
+  for (const b of [modeBtn, thinkBtn, modelBtn]) b.onmousedown = (e) => e.preventDefault(); // keep the caret in the box
+  modeBtn.onclick = () => openChoices('mode', MODES, mode, setMode);
+  thinkBtn.onclick = () => openChoices('think', LEVELS, think, (v) => { showThink(v); vscode.postMessage({ type: 'setThinking', level: v }); });
+  showMode(mode);
+  showThink(think);
   ctxEye.onclick = () => setContextOn(false);
   $('ctxPin').onclick = () => contextRel && vscode.postMessage({ type: 'pinFile', rel: contextRel });
   $('attach').onclick = () => {
@@ -1429,9 +1473,7 @@
 
   // Claude Code keys: Shift+Tab cycles the approval mode, Esc stops the agent.
   function cycleMode() {
-    const opts = [...modeSel.options].map((o) => o.value);
-    modeSel.value = opts[(opts.indexOf(modeSel.value) + 1) % opts.length];
-    modeSel.onchange();
+    setMode(MODES[(MODES.findIndex((x) => x.key === mode) + 1) % MODES.length].key);
   }
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && busy && !pk && !openForm) { e.preventDefault(); vscode.postMessage({ type: 'stop' }); }
@@ -1669,8 +1711,8 @@
         modelBtn.title = `Model: ${name} (click to change)`;
         break;
       }
-      case 'mode': modeSel.value = m.mode; break;
-      case 'thinking_level': $('think').value = m.level || ''; break;
+      case 'mode': showMode(m.mode); break;
+      case 'thinking_level': showThink(m.level || ''); break;
       case 'paths': markPaths(m); break;
       case 'session': saveState({ session: { file: m.file, worktree: m.worktree || null } }); break; // a tab reopens it after a reload
       case 'meter': showMeter(m); break;
