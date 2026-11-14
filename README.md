@@ -171,6 +171,8 @@ Click the model name in the toolbar to open the model list. Type to filter (`fre
 
 **Your models**: the model list in the chat shows only your models (★) plus the one in use. **Manage models…** (last entry of that list, or **…** → **Manage Models…**) shows every model omp can run, with a filter (try `free`, `deepseek`, `kimi`): click ☆ to add a model to your models, **Use** to switch to it. Your models sit on top, where ↑ ↓ set their order and ✕ removes one. Your models are kept across workspaces.
 
+Keyboard in **Manage models…**: **↓** from the filter into the list, **↑ ↓** to move, **Enter** to use a model, **Space** to star or unstar it, **Alt+↑ ↓** to reorder your models, start typing to filter again, **Esc** to close. The filter text is remembered.
+
 Switching models keeps the conversation: the next message continues it on the new model. If the new model's provider has no key yet, OMP Chat asks you to add one first.
 
 ### Rewind
@@ -229,6 +231,26 @@ The 🧩 button in the title bar (or **OMP Chat: Plugins & Skills**) lists every
 - **Apply** restarts the agent with your choice and keeps the conversation. The choice applies to this workspace only; Claude Code's and omp's own settings are not changed.
 - **Auto-pick skills for each message**: switched-on skills are always offered to the agent, which chooses among them (as in Claude Code). With auto-pick on, OMP Chat also names up to three skills that match your request (it understands common Vietnamese requests too), and shows *Auto-picked skills: …* in the chat. When the agent opens a skill, its row reads **Using skill** *name*.
 
+### Your own commands
+
+A command is a saved prompt you send by typing `/name`. **…** → **Custom Commands…** (or **Your commands…** at the end of the `/` list) shows them:
+
+- **New command…**: a name, a description, an optional argument hint and the prompt. `$ARGUMENTS` in the prompt is replaced by what you type after the name, so `/review src/app.ts` sends the prompt about that file.
+- **Save for** this project (`.omp/commands/<name>.md`, can be committed and shared with your team) or all projects (`~/.omp/agent/commands`).
+- Each command has **Use** (puts it in the message box), ✏ (opens the file to edit) and 🗑 (click twice; the file goes to the trash).
+
+Claude Code commands (`.claude/commands/*.md`) are listed and work too.
+
+### MCP servers
+
+**…** → **MCP Servers…** lists the servers in this project (`.omp/mcp.json`) and in your user settings:
+
+- the switch turns a server on or off, ▷ tests the connection, 🗑 removes it (click twice);
+- **Add server…** takes a name and either a command (a local server, e.g. `npx -y @modelcontextprotocol/server-filesystem .`) or a URL (a remote server);
+- servers start with the agent, so after a change **Restart agent to apply** (the conversation is kept).
+
+Servers that need a browser sign-in (OAuth) have to be authorized once in omp's terminal app.
+
 ### Commands
 
 These come from omp and work through `/` commands in the chat:
@@ -243,6 +265,9 @@ These come from omp and work through `/` commands in the chat:
 Type `/` to see everything available on your machine.
 
 ## 7. Settings
+
+**Language**: the panel, menus and settings follow VS Code's display language. Vietnamese is included (**Configure Display Language** → Tiếng Việt, then reload). Your messages, the agent's replies and code are never translated.
+
 
 | Setting | Default | |
 |---|---|---|
@@ -264,6 +289,8 @@ Type `/` to see everything available on your machine.
 | OMP Chat: Manage Models… | **…** menu, or "Manage models…" in the model list |
 | OMP Chat: Set API Key… | **…** menu |
 | OMP Chat: Export Chat as Markdown | **…** menu |
+| OMP Chat: Custom Commands… | **…** menu, or the end of the `/` list |
+| OMP Chat: MCP Servers… | **…** menu |
 | OMP Chat: Add File to OMP Chat | Right-click a file in the Explorer or an editor tab |
 | OMP Chat: Ask / Explain / Fix with OMP Chat | Right-click in the editor; Fix also in the light bulb |
 | OMP Chat: Stop Agent | **■** / **Esc** |

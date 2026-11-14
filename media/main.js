@@ -3,6 +3,9 @@
   const md = window.markdownit({ html: false, linkify: true });
   const mdLines = window.markdownit({ html: false, linkify: true, breaks: true }); // command output is line-oriented
   const $ = (id) => document.getElementById(id);
+  // The panel in VS Code's language when the extension sent a dictionary (media/l10n.js); chat content stays as written.
+  try { window.ompL10n?.watch(window.ompL10n.compile(JSON.parse($('l10n')?.textContent || 'null')), document.body); }
+  catch (e) { console.error('l10n', e); }
   const log = $('log'), welcome = $('welcome'), input = $('input'), popup = $('popup');
   const sendBtn = $('send'), stopBtn = $('stop'), modelBtn = $('model'), modeSel = $('mode');
   const ctxBox = $('ctx'), ctxLabel = $('ctxLabel'), ctxIcon = $('ctxIcon'), ctxEye = $('ctxEye');
@@ -498,6 +501,8 @@
     if (openForm) { vscode.postMessage({ type: 'formAnswer', id: openForm, values: null }); openForm = null; }
     sheet.hidden = true;
     sheet.textContent = '';
+    sheet.onkeydown = null;
+    sheet.className = '';
   }
   function openSheet(title, iconName, onRefresh) {
     closeSheet();
@@ -533,6 +538,11 @@
       if (f.type === 'select') {
         inp = el('select', 'finput');
         for (const o of f.options) { const op = el('option', '', o.label); op.value = o.value; inp.appendChild(op); }
+      } else if (f.type === 'textarea') {
+        inp = el('textarea', 'finput farea');
+        inp.rows = 6;
+        inp.placeholder = f.placeholder || '';
+        inp.onkeydown = (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); ok.click(); } };
       } else {
         inp = el('input', 'finput');
         inp.type = f.type === 'password' ? 'password' : 'text';
@@ -558,7 +568,7 @@
     cancel.onclick = closeSheet;
     btns.append(ok, cancel);
     s.appendChild(btns);
-    (Object.values(inputs).find((i) => i.tagName === 'INPUT' && !i.value) || ok).focus();
+    (Object.values(inputs).find((i) => i.tagName !== 'SELECT' && !i.value) || ok).focus();
   }
 
   // ---- Plugins & skills: switch plugins (or single skills) on/off for this workspace, and auto-pick ----
@@ -637,9 +647,12 @@
   }
 
   // ---- Models sheet: every model omp can run; ★ the ones you use and only those show in the chat's picker ----
-  let modelFilter = ''; // kept across re-renders (reordering re-sends the sheet)
+  let modelFilter = (vscode.getState() || {}).modelFilter || ''; // kept across re-renders and reloads
+  let modelFocus = null; // { id, fav } of the focused row, refocused when the sheet is re-sent (reordering)
   const SHEET_LIMIT = 150;
   function showModelsSheet(m) {
+    const resent = !sheet.hidden && sheet.classList.contains('models'); // re-sent after reordering: keep your place
+    if (!resent) modelFocus = null;
     const s = openSheet('Models', 'sparkle');
     s.classList.add('models');
     const fav = m.favorites.map((x) => x.id);
@@ -649,6 +662,10 @@
 
     const row = (x, inFav, i, n) => {
       const r = el('div', 'mrow' + (x.id === m.current ? ' current' : ''));
+      r.tabIndex = 0;
+      r._id = x.id;
+      r._fav = !!inFav;
+      r.onfocus = () => { modelFocus = { id: x.id, fav: !!inFav }; };
       const btn = (iconName, title, onclick, disabled, cls) => {
         const b = el('button', 'icon' + (cls ? ' ' + cls : ''));
         b.title = title;
@@ -693,6 +710,7 @@
     }
     function renderAll() {
       modelFilter = filter.value;
+      try { vscode.setState({ ...(vscode.getState() || {}), modelFilter }); } catch { /* state is a convenience */ }
       const q = filter.value.toLowerCase().trim();
       const match = (x) => !q || x.id.toLowerCase().includes(q) || (x.name || '').toLowerCase().includes(q)
         || (q === 'free' && x.free) || ((q === 'go' || q === 'go plan') && x.plan);
@@ -707,13 +725,129 @@
       const i = fav.indexOf(id);
       if (i >= 0) fav.splice(i, 1); else fav.push(id);
       vscode.postMessage({ type: 'toggleFavorite', id });
+      const back = modelFocus;
       renderFav();
       renderAll();
+      refocus(back);
+    }
+    function refocus(f) {
+      if (!f) return false;
+      const rows = [...s.querySelectorAll('.mrow')];
+      const r = rows.find((x) => x._id === f.id && x._fav === f.fav) || rows.find((x) => x._id === f.id);
+      r?.focus();
+      return !!r;
     }
     allBox.append(el('div', 'ush', ''), filter, list);
     filter.oninput = renderAll;
     renderFav();
     renderAll();
+
+    // Keyboard: ↓ from the filter into the list, ↑ ↓ between models, Enter = Use, Space = ☆,
+    // Alt+↑ ↓ reorders your models, typing jumps back to the filter, Esc closes.
+    s.onkeydown = (e) => {
+      const rows = [...s.querySelectorAll('.mrow')];
+      const r = e.target.closest?.('.mrow');
+      if (e.key === 'Escape') { e.preventDefault(); return closeSheet(); }
+      if (e.target === filter) {
+        if (e.key === 'ArrowDown' || e.key === 'Enter') { e.preventDefault(); (list.querySelector('.mrow') || rows[0])?.focus(); }
+        return;
+      }
+      if (!r || e.target !== r) return;
+      const i = rows.indexOf(r);
+      if (e.altKey && r._fav && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        e.preventDefault();
+        vscode.postMessage({ type: 'moveFavorite', id: r._id, dir: e.key === 'ArrowUp' ? -1 : 1 });
+      } else if (e.key === 'ArrowDown') { e.preventDefault(); rows[i + 1]?.focus(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); (rows[i - 1] || filter).focus(); }
+      else if (e.key === 'Home') { e.preventDefault(); rows[0]?.focus(); }
+      else if (e.key === 'End') { e.preventDefault(); rows.at(-1)?.focus(); }
+      else if (e.key === 'Enter') { e.preventDefault(); if (r._id !== m.current) { vscode.postMessage({ type: 'setModel', id: r._id }); closeSheet(); } }
+      else if (e.key === ' ') { e.preventDefault(); toggle(r._id); }
+      else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) { filter.focus(); } // the key lands in the filter
+    };
+    if (!refocus(modelFocus)) filter.focus();
+  }
+
+  // A button that asks once more before doing something you cannot take back from the panel.
+  function confirmButton(label, iconName, title, onConfirm) {
+    const b = el('button', 'icon');
+    b.title = title;
+    b.appendChild(icon(iconName));
+    b.onclick = () => {
+      if (b.classList.contains('armed')) return onConfirm();
+      b.classList.add('armed');
+      b.textContent = '';
+      b.append(icon('warning'), el('span', '', label));
+      setTimeout(() => { if (b.isConnected) { b.classList.remove('armed'); b.textContent = ''; b.appendChild(icon(iconName)); } }, 3000);
+    };
+    return b;
+  }
+  const iconBtn = (iconName, title, onclick) => {
+    const b = el('button', 'icon');
+    b.title = title;
+    b.appendChild(icon(iconName));
+    b.onclick = onclick;
+    return b;
+  };
+
+  // ---- Your slash commands: prompt files omp loads; type /name in the chat to send one ----
+  function showCommandsSheet(m) {
+    const s = openSheet('Commands', 'symbol-event', () => vscode.postMessage({ type: 'commandsSheet' }));
+    s.appendChild(el('div', 'unote', 'A command is a saved prompt: type /name in the chat to send it. omp also reads Claude Code commands (.claude/commands).'));
+    if (m.note) s.appendChild(el('div', 'unote snote', m.note));
+    const sec = section(s, `Your commands · ${m.list.length}`);
+    for (const c of m.list) {
+      const r = el('div', 'mrow');
+      const text = el('div', 'mtext');
+      text.append(el('div', 'mname', `/${c.name}${c.hint ? ' ' + c.hint : ''}`), el('div', 'mid', `${c.description || 'No description'} · ${c.scope}`));
+      const use = el('button', 'secondary', 'Use');
+      use.title = 'Put it in the message box';
+      use.onclick = () => { closeSheet(); input.value = `/${c.name} `; input.focus(); autosize(); };
+      r.append(icon('symbol-event'), text, use,
+        iconBtn('edit', 'Edit the file', () => vscode.postMessage({ type: 'editCommand', file: c.file })),
+        confirmButton('Delete?', 'trash', 'Delete (moves the file to the trash)', () => vscode.postMessage({ type: 'deleteCommand', file: c.file })));
+      sec.appendChild(r);
+    }
+    if (!m.list.length) note(sec, 'None yet. Commands you create are saved as Markdown files you can share with your team.');
+    const btns = el('div', 'cbtns');
+    const add = el('button', 'primary', 'New command…');
+    add.onclick = () => vscode.postMessage({ type: 'newCommand' });
+    btns.appendChild(add);
+    s.appendChild(btns);
+  }
+
+  // ---- MCP servers: switch on/off, test, remove, add (omp's /mcp commands) ----
+  function showMcpSheet(m) {
+    const s = openSheet('MCP servers', 'plug', () => vscode.postMessage({ type: 'mcp' }));
+    s.appendChild(el('div', 'unote', 'MCP servers give the agent extra tools (GitHub, databases, browsers…). Servers start when the agent starts.'));
+    if (m.note) {
+      const n = el('pre', 'mcpout', m.note);
+      s.appendChild(n);
+    }
+    const sec = section(s, `Servers · ${m.servers.length}`);
+    for (const x of m.servers) {
+      const r = el('div', 'mrow');
+      const t = toggle(x.enabled, x.enabled ? 'Switch off' : 'Switch on');
+      t.box.onchange = () => vscode.postMessage({ type: 'mcpAction', kind: t.box.checked ? 'enable' : 'disable', name: x.name });
+      const text = el('div', 'mtext');
+      text.append(el('div', 'mname', x.name), el('div', 'mid', `${x.type} · ${x.location} · ${x.scope === 'user' ? 'all projects' : 'this project'}`));
+      r.append(t.label, text,
+        iconBtn('debug-start', 'Test the connection', () => vscode.postMessage({ type: 'mcpAction', kind: 'test', name: x.name })),
+        confirmButton('Remove?', 'trash', 'Remove this server', () => vscode.postMessage({ type: 'mcpAction', kind: 'remove', name: x.name })));
+      sec.appendChild(r);
+    }
+    if (!m.servers.length) note(sec, 'No MCP servers in this project or your user settings yet.');
+    const btns = el('div', 'cbtns');
+    const add = el('button', m.changed ? 'secondary' : 'primary', 'Add server…');
+    add.onclick = () => vscode.postMessage({ type: 'addMcp' });
+    btns.appendChild(add);
+    if (m.changed) {
+      const apply = el('button', 'primary', 'Restart agent to apply');
+      apply.title = 'The conversation is kept';
+      apply.onclick = () => { closeSheet(); vscode.postMessage({ type: 'applyMcp' }); };
+      btns.prepend(apply);
+    }
+    s.appendChild(btns);
   }
 
   // Saved keys per provider: switch, rename, remove, add.
@@ -1028,7 +1162,11 @@
     let m = /^\/(\S*)$/.exec(input.value);
     if (m && commands.length) {
       const all = commands.map((c) => ({ key: c.name, label: '/' + c.name, desc: c.hint ? `${c.hint} — ${c.description}` : c.description }));
-      return openPicker('slash', all, (it) => { input.value = '/' + it.key + ' '; input.focus(); autosize(); }, m[1]);
+      const manage = { key: '\u0000commands', label: 'Your commands…', icon: 'settings-gear', desc: 'create, edit or delete your own / commands' };
+      return openPicker('slash', [...all, manage], (it) => {
+        if (it === manage) { input.value = ''; autosize(); return vscode.postMessage({ type: 'commandsSheet' }); }
+        input.value = '/' + it.key + ' '; input.focus(); autosize();
+      }, m[1]);
     }
     m = /(^|\s)@([^\s@]*)$/.exec(before);
     if (m) {
@@ -1420,6 +1558,8 @@
       case 'keys': showKeys(m); break;
       case 'plugins': showPlugins(m); break;
       case 'modelsSheet': showModelsSheet(m); break;
+      case 'commandsSheet': showCommandsSheet(m); break;
+      case 'mcpSheet': showMcpSheet(m); break;
       case 'subagent': renderSubagent(m); break;
       case 'subagentTranscript': showSubagentTranscript(m); break;
     }

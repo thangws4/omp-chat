@@ -2,7 +2,7 @@
   "name": "omp-chat",
   "displayName": "OMP Chat by DT",
   "description": "AI coding chat panel for VS Code, powered by the oh-my-pi (omp) agent and OpenRouter / DeepSeek models.",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "publisher": "dtcode-dev",
   "icon": "media/logo.png",
   "engines": {
@@ -28,84 +28,94 @@
         {
           "type": "webview",
           "id": "ompChat.view",
-          "name": "Chat"
+          "name": "%view.chat%"
         }
       ]
     },
     "commands": [
       {
         "command": "ompChat.focus",
-        "title": "Open",
+        "title": "%command.focus%",
         "category": "OMP Chat"
       },
       {
         "command": "ompChat.newSession",
-        "title": "New Chat",
+        "title": "%command.newSession%",
         "category": "OMP Chat",
         "icon": "$(add)"
       },
       {
         "command": "ompChat.history",
-        "title": "Show Chats…",
+        "title": "%command.history%",
         "category": "OMP Chat",
         "icon": "$(history)"
       },
       {
         "command": "ompChat.usage",
-        "title": "Usage & Limits",
+        "title": "%command.usage%",
         "category": "OMP Chat",
         "icon": "$(graph)"
       },
       {
         "command": "ompChat.plugins",
-        "title": "Plugins & Skills",
+        "title": "%command.plugins%",
         "category": "OMP Chat",
         "icon": "$(extensions)"
       },
       {
         "command": "ompChat.pickModel",
-        "title": "Choose Model…",
+        "title": "%command.pickModel%",
         "category": "OMP Chat"
       },
       {
         "command": "ompChat.manageModels",
-        "title": "Manage Models…",
+        "title": "%command.manageModels%",
         "category": "OMP Chat"
       },
       {
         "command": "ompChat.setApiKey",
-        "title": "Set API Key…",
+        "title": "%command.setApiKey%",
         "category": "OMP Chat"
       },
       {
         "command": "ompChat.stop",
-        "title": "Stop Agent",
+        "title": "%command.stop%",
         "category": "OMP Chat"
       },
       {
         "command": "ompChat.exportChat",
-        "title": "Export Chat as Markdown",
+        "title": "%command.exportChat%",
         "category": "OMP Chat",
         "icon": "$(export)"
       },
       {
         "command": "ompChat.addFile",
-        "title": "Add File to OMP Chat",
+        "title": "%command.addFile%",
         "category": "OMP Chat"
       },
       {
         "command": "ompChat.ask",
-        "title": "Ask OMP Chat",
+        "title": "%command.ask%",
         "category": "OMP Chat"
       },
       {
         "command": "ompChat.explain",
-        "title": "Explain with OMP Chat",
+        "title": "%command.explain%",
         "category": "OMP Chat"
       },
       {
         "command": "ompChat.fix",
-        "title": "Fix with OMP Chat",
+        "title": "%command.fix%",
+        "category": "OMP Chat"
+      },
+      {
+        "command": "ompChat.commands",
+        "title": "%command.commands%",
+        "category": "OMP Chat"
+      },
+      {
+        "command": "ompChat.mcp",
+        "title": "%command.mcp%",
         "category": "OMP Chat"
       }
     ],
@@ -150,6 +160,16 @@
           "command": "ompChat.exportChat",
           "when": "view == ompChat.view",
           "group": "2_chat@1"
+        },
+        {
+          "command": "ompChat.commands",
+          "when": "view == ompChat.view",
+          "group": "2_chat@2"
+        },
+        {
+          "command": "ompChat.mcp",
+          "when": "view == ompChat.view",
+          "group": "2_chat@3"
         }
       ],
       "editor/context": [
@@ -187,12 +207,12 @@
         "ompChat.ompPath": {
           "type": "string",
           "default": "omp",
-          "description": "Path to the omp executable."
+          "description": "%config.ompPath%"
         },
         "ompChat.model": {
           "type": "string",
           "default": "openrouter/baidu/ernie-5.5-flash-preview:free",
-          "description": "Model passed to omp --model as provider/id, e.g. openrouter/baidu/ernie-5.5-flash-preview:free, openrouter/cohere/north-mini-code:free, deepseek/deepseek-flash. List them with `omp models openrouter`."
+          "description": "%config.model%"
         },
         "ompChat.approvalMode": {
           "type": "string",
@@ -204,14 +224,14 @@
             "plan"
           ],
           "enumDescriptions": [
-            "Ask before every file write/edit and command (read-only tools run freely).",
-            "Like always-ask, but approvals can be remembered for a file or folder.",
-            "Auto-accept file edits; ask before running commands.",
-            "Never ask (omp's own default).",
-            "Plan mode: read-only; the agent writes a plan, and you approve it before anything changes."
+            "%config.approvalMode.always-ask%",
+            "%config.approvalMode.always-ask-cached%",
+            "%config.approvalMode.write%",
+            "%config.approvalMode.yolo%",
+            "%config.approvalMode.plan%"
           ],
           "default": "always-ask",
-          "description": "When omp must ask before running a tool. Changing it restarts omp and resumes the conversation."
+          "description": "%config.approvalMode%"
         },
         "ompChat.extraArgs": {
           "type": "array",
@@ -219,7 +239,7 @@
             "type": "string"
           },
           "default": [],
-          "description": "Extra CLI arguments appended after --mode rpc."
+          "description": "%config.extraArgs%"
         }
       }
     }

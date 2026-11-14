@@ -402,3 +402,12 @@ button.send .codicon { font-size: 16px; }
 #popup .pname { font-family: var(--vscode-editor-font-family); }
 #popup .pdesc { color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; }
 #popup .item.active .pdesc { color: inherit; opacity: .8; }
+
+/* ---- forms, commands and MCP sheets ---- */
+.finput.farea { resize: vertical; min-height: 90px; font-family: var(--vscode-editor-font-family); }
+.snote { color: var(--vscode-foreground); }
+.mcpout { white-space: pre-wrap; word-break: break-word; max-height: 140px; overflow: auto; margin: 6px 0; padding: 6px 8px; border-radius: 4px;
+  background: var(--vscode-textCodeBlock-background); font-family: var(--vscode-editor-font-family); font-size: .85em; }
+button.icon.armed { display: inline-flex; gap: 4px; align-items: center; width: auto; padding: 0 6px;
+  color: var(--vscode-errorForeground); outline: 1px solid var(--vscode-errorForeground); border-radius: 4px; }
+.mrow:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }

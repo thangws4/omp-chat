@@ -8,6 +8,7 @@ const { spawnSync } = require('child_process');
 const { OmpClient } = require('./omp-client');
 const keys = require('./keys');
 const plugins = require('./plugins');
+const l10n = require('./media/l10n');
 const { PROVIDERS } = keys;
 
 const OMP_PACKAGE = '@oh-my-pi/pi-coding-agent'; // needs Bun >= 1.4.4
@@ -44,6 +45,15 @@ const RESTART_KEYS = ['approvalMode', 'ompPath', 'extraArgs'];
 
 const LAST_SESSION = 'ompChat.lastSession'; // workspaceState key: session file to resume on reload
 // Webview messages that can change the agent status shown outside the chat.
+// The UI dictionary for VS Code's display language (l10n/<lang>.json), or null for English.
+function loadDictionary(dir) {
+  const lang = String(vscode.env?.language || 'en').toLowerCase();
+  for (const l of new Set([lang, lang.split('-')[0]])) {
+    try { return JSON.parse(fs.readFileSync(path.join(dir, 'l10n', `${l}.json`), 'utf8')); } catch { /* no dictionary for this language */ }
+  }
+  return null;
+}
+
 const STATUS_EVENTS = new Set(['busy', 'idle', 'dialog', 'dialog_close', 'clear']);
 const STATUS_UI = {
   blocked: { title: '🔴 waiting for you', badge: 'OMP Chat is waiting for your answer', bar: '$(bell-dot) OMP: needs you' },
@@ -113,6 +123,49 @@ function toMarkdown(messages, model) {
   return out.join('\n\n') + '\n';
 }
 
+// ---- your own slash commands: Markdown prompt files omp loads from these folders ----
+function commandDirs(cwd) {
+  const home = os.homedir();
+  return [
+    cwd && { dir: path.join(cwd, '.omp', 'commands'), scope: 'project' },
+    cwd && { dir: path.join(cwd, '.claude', 'commands'), scope: 'project · .claude' },
+    { dir: path.join(home, '.omp', 'agent', 'commands'), scope: 'all projects' },
+    { dir: path.join(home, '.claude', 'commands'), scope: 'all projects · .claude' },
+  ].filter(Boolean);
+}
+
+// ponytail: top-level *.md only; omp also reads nested folders as "dir:name", list those when someone needs them.
+function listCommandFiles(cwd) {
+  const out = [];
+  for (const { dir, scope } of commandDirs(cwd)) {
+    let names = [];
+    try { names = fs.readdirSync(dir).filter((f) => f.endsWith('.md')); } catch { continue; }
+    for (const f of names) {
+      const file = path.join(dir, f);
+      let text = '';
+      try { text = fs.readFileSync(file, 'utf8'); } catch { continue; }
+      const fm = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
+      const field = (k) => fm && new RegExp(`^${k}:\\s*(.*)$`, 'm').exec(fm[1])?.[1].trim().replace(/^["']|["']$/g, '');
+      const body = fm ? text.slice(fm[0].length) : text;
+      const description = field('description') || body.split('\n').find((l) => l.trim())?.trim().slice(0, 80) || '';
+      out.push({ name: f.slice(0, -3), file, scope, description, hint: field('argument-hint') || field('argumentHint') || '' });
+    }
+  }
+  return out;
+}
+
+function commandFileText({ description, hint, prompt }) {
+  const q = (s) => JSON.stringify(String(s).replace(/\r?\n/g, ' ').trim());
+  const fm = [description && `description: ${q(description)}`, hint && `argument-hint: ${q(hint)}`].filter(Boolean);
+  return `${fm.length ? `---\n${fm.join('\n')}\n---\n\n` : ''}${String(prompt).trim()}\n`;
+}
+
+// "/mcp list" output: "name | stdio | enabled | npx … [user]" per server.
+function parseMcpList(text) {
+  return String(text || '').split('\n').map((l) => /^(\S+) \| (\S+) \| (enabled|disabled) \| (.*) \[(user|project)\]$/.exec(l.trim()))
+    .filter(Boolean).map(([, name, type, state, location, scope]) => ({ name, type, enabled: state === 'enabled', location, scope }));
+}
+
 // The one argument worth showing for a tool call: a path, a command or a pattern.
 function toolArg(a) {
   if (!a || typeof a !== 'object') return '';
@@ -175,6 +228,8 @@ function sessionSummary(file) {
 class ChatProvider {
   constructor(context) {
     this.context = context;
+    this.dictionary = loadDictionary(context.extensionUri?.fsPath || '');
+    this.dict = l10n.compile(this.dictionary);
     this.view = null;
     this.client = null;
     this.busy = false;
@@ -199,6 +254,9 @@ class ChatProvider {
     this.turnUsage = null;       // tokens and cost summed over one agent turn
     this.newReadyPromise();
   }
+
+  // UI text in VS Code's language when there is a dictionary for it (English otherwise).
+  t(text) { return l10n.translate(this.dict, text) ?? text; }
 
   newReadyPromise() {
     this.readyPromise = new Promise((r) => { this.markReady = r; });
@@ -334,15 +392,15 @@ class ChatProvider {
     const s = this.agentStatus();
     const info = STATUS_UI[s];
     if (this.view) {
-      this.view.description = info.title;
-      this.view.badge = info.badge ? { value: 1, tooltip: info.badge } : undefined;
+      this.view.description = this.t(info.title);
+      this.view.badge = info.badge ? { value: 1, tooltip: this.t(info.badge) } : undefined;
     }
     const item = this.statusItem;
     if (!item) return;
     if (s === 'idle') return item.hide();
     const subs = this.runningSubagents();
-    item.text = info.bar + (subs && s === 'working' ? ` · ${subs} subagent${subs > 1 ? 's' : ''}` : '');
-    item.tooltip = `${info.badge || 'OMP Chat is working'}${this.modelName ? ` · ${this.modelName}` : ''} (click to open)`;
+    item.text = this.t(info.bar) + (subs && s === 'working' ? ` · ${this.t(`${subs} subagent${subs > 1 ? 's' : ''}`)}` : '');
+    item.tooltip = `${this.t(info.badge || 'OMP Chat is working')}${this.modelName ? ` · ${this.modelName}` : ''} ${this.t('(click to open)')}`;
     item.backgroundColor = s === 'blocked' ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
     item.show();
   }
@@ -473,6 +531,14 @@ class ChatProvider {
       case 'pinFile': return this.pinFile(String(m.rel || ''));
       case 'unpinFile': return this.unpinFile(m.rel);
       case 'exportChat': return this.exportChat();
+      case 'commandsSheet': return this.showCommands();
+      case 'newCommand': return this.newCommand();
+      case 'editCommand': return this.editCommand(m.file);
+      case 'deleteCommand': return this.deleteCommand(m.file);
+      case 'mcp': return this.showMcp();
+      case 'mcpAction': return this.mcpAction(m.kind, m.name);
+      case 'addMcp': return this.addMcp();
+      case 'applyMcp': return this.applyMcp();
       case 'applyPlugins': return this.applyPlugins(Array.isArray(m.disabled) ? m.disabled : [], m.auto);
       case 'action': // buttons on error / notice lines
         switch (m.cmd) {
@@ -822,7 +888,8 @@ class ChatProvider {
         this.post({ type: 'commands', list: this.commands });
         break;
       case 'command_output':
-        this.post({ type: 'command_output', text: r.text });
+        if (this.quietSink) this.quietSink.push(r.text); // a command the panel ran for itself (MCP list, reload)
+        else this.post({ type: 'command_output', text: r.text });
         break;
       case 'config_update':
         this.setModel(r.model);
@@ -942,6 +1009,127 @@ class ChatProvider {
     await this.restart(); // omp reads the overlay at start; the conversation is resumed
     this.post({ type: 'notice', text: disabled.length ? `Plugins updated: ${disabled.length} skill${disabled.length > 1 ? 's' : ''} switched off in this workspace.`
       : 'Plugins updated: all skills are on.' });
+  }
+
+  // Run one of omp's own slash commands for the panel and return its output instead of printing it in the chat.
+  // omp answers a local command only after its output, so the output is complete when the request resolves.
+  async quietCommand(message) {
+    const client = await this.ensureClient();
+    if (!client) throw new Error('omp is not running');
+    const out = [];
+    this.quietSink = out;
+    try { await client.request({ type: 'prompt', message }); }
+    finally { this.quietSink = null; }
+    return out.join('\n').trim();
+  }
+
+  // ---- your own slash commands ----
+  async showCommands(note) {
+    await this.reveal();
+    this.post({ type: 'commandsSheet', list: listCommandFiles(this.cwd), note: note || '' });
+  }
+
+  async newCommand() {
+    const v = await this.ask({
+      title: 'New command',
+      text: 'Type /name in the chat to send this prompt. $ARGUMENTS in the prompt is replaced by what you type after the name.',
+      fields: [
+        { name: 'name', label: 'Name', placeholder: 'e.g. review', required: true },
+        { name: 'description', label: 'Description', placeholder: 'Shown in the / list' },
+        { name: 'hint', label: 'Arguments hint (optional)', placeholder: 'e.g. <file>' },
+        { name: 'prompt', label: 'Prompt', type: 'textarea', required: true,
+          placeholder: 'Review $ARGUMENTS for bugs, security issues and missing tests. Reply with a numbered list.' },
+        { name: 'scope', label: 'Save for', type: 'select', value: 'project',
+          options: [{ value: 'project', label: 'This project (.omp/commands)' }, { value: 'user', label: 'All projects (~/.omp/agent/commands)' }] },
+      ],
+      submit: 'Create', cancel: 'Cancel',
+    });
+    if (!v) return this.showCommands();
+    const name = v.name.trim().replace(/^\//, '');
+    if (!/^[A-Za-z0-9][\w-]*$/.test(name)) return this.showCommands(`"${name}" is not a valid name: use letters, digits, - and _.`);
+    const dir = commandDirs(this.cwd).find((d) => d.scope === (v.scope === 'user' || !this.cwd ? 'all projects' : 'project')).dir;
+    const file = path.join(dir, `${name}.md`);
+    if (fs.existsSync(file)) return this.showCommands(`/${name} already exists.`);
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(file, commandFileText(v));
+    } catch (e) { return this.showCommands(`Could not save: ${e.message}`); }
+    await this.reloadCommands();
+    return this.showCommands(`Created /${name}.`);
+  }
+
+  // Only files from the list above are opened or deleted (the webview names them by path).
+  commandFileOf(file) { return listCommandFiles(this.cwd).find((c) => c.file === file); }
+
+  async editCommand(file) {
+    if (!this.commandFileOf(file)) return;
+    await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: false });
+  }
+
+  async deleteCommand(file) {
+    const c = this.commandFileOf(file);
+    if (!c) return;
+    try { await vscode.workspace.fs.delete(vscode.Uri.file(file), { useTrash: true }); }
+    catch (e) { return this.showCommands(`Could not delete: ${e.message}`); }
+    await this.reloadCommands();
+    return this.showCommands(`Deleted /${c.name} (moved to the trash).`);
+  }
+
+  // omp reads command files when it loads plugins; this makes a new or deleted one show up in the / list.
+  async reloadCommands() {
+    try { await this.quietCommand('/reload-plugins'); } catch { /* omp not running: it reads them at start */ }
+  }
+
+  // ---- MCP servers (omp's /mcp commands; same user and project mcp.json files as `/mcp list`) ----
+  async showMcp(note) {
+    await this.reveal();
+    let out = '';
+    try { out = await this.quietCommand('/mcp list'); }
+    catch (e) { return this.post({ type: 'error', text: `Could not list MCP servers: ${e.message}` }); }
+    this.mcpServers = parseMcpList(out);
+    this.post({ type: 'mcpSheet', servers: this.mcpServers, note: note || '', changed: !!this.mcpChanged });
+  }
+
+  async mcpAction(kind, name) {
+    const s = (this.mcpServers || []).find((x) => x.name === name);
+    if (!s || !['enable', 'disable', 'remove', 'test'].includes(kind)) return;
+    let out;
+    try { out = await this.quietCommand(`/mcp ${kind} ${name}${kind === 'remove' ? ` --scope ${s.scope}` : ''}`); }
+    catch (e) { out = e.message; }
+    if (kind !== 'test') this.mcpChanged = true;
+    return this.showMcp(out);
+  }
+
+  async addMcp() {
+    const v = await this.ask({
+      title: 'Add MCP server',
+      text: 'A local server is started with a command (for example npx -y @modelcontextprotocol/server-filesystem .). A remote one is reached by URL.',
+      fields: [
+        { name: 'name', label: 'Name', placeholder: 'e.g. github', required: true },
+        { name: 'kind', label: 'Type', type: 'select', value: 'command',
+          options: [{ value: 'command', label: 'Local: run a command' }, { value: 'url', label: 'Remote: URL (HTTP)' }] },
+        { name: 'target', label: 'Command or URL', placeholder: 'npx -y @modelcontextprotocol/server-…  or  https://…', required: true },
+        { name: 'scope', label: 'Save for', type: 'select', value: 'project',
+          options: [{ value: 'project', label: 'This project (.omp/mcp.json)' }, { value: 'user', label: 'All projects' }] },
+      ],
+      submit: 'Add', cancel: 'Cancel',
+    });
+    if (!v) return this.showMcp();
+    const name = v.name.trim(), target = v.target.trim().replace(/\s*\n\s*/g, ' ');
+    if (!/^[A-Za-z0-9][\w.-]*$/.test(name)) return this.showMcp(`"${name}" is not a valid name: use letters, digits, ., - and _.`);
+    if (v.kind === 'url' && !/^https?:\/\/\S+$/.test(target)) return this.showMcp('The URL must start with http:// or https:// and contain no spaces.');
+    const scope = v.scope === 'user' ? 'user' : 'project';
+    let out;
+    try { out = await this.quietCommand(`/mcp add ${name} --scope ${scope} ${v.kind === 'url' ? `--url ${target}` : `-- ${target}`}`); }
+    catch (e) { out = e.message; }
+    this.mcpChanged = true;
+    return this.showMcp(out);
+  }
+
+  async applyMcp() {
+    this.mcpChanged = false;
+    await this.restart(); // omp connects MCP servers at start; the conversation is resumed
+    this.post({ type: 'notice', text: 'Agent restarted with the new MCP servers.' });
   }
 
   // Auto-pick: up to 3 enabled skills matching the request, named to the model ahead of the message.
@@ -1605,6 +1793,7 @@ class ChatProvider {
   html(webview) {
     const uri = (f) => webview.asWebviewUri(vscode.Uri.joinPath(this.context.extensionUri, 'media', f));
     const nonce = crypto.randomBytes(16).toString('hex');
+    const t = (s) => this.t(s); // static text below; the panel translates what it builds itself
     // Inlined (not <img>) so main.css can recolor the mascot for the current VS Code theme.
     const mascot = fs.readFileSync(path.join(this.context.extensionUri.fsPath, 'media', 'mascot.svg'), 'utf8');
     return `<!DOCTYPE html>
@@ -1619,13 +1808,13 @@ class ChatProvider {
   <div id="welcome">
     <div class="hero">${mascot}</div>
     <h2>OMP Chat</h2>
-    <p>Ask about your code, or let the agent change it.<br>It asks before editing files or running commands.</p>
+    <p>${t('Ask about your code, or let the agent change it.')}<br>${t('It asks before editing files or running commands.')}</p>
     <div id="suggest">
       <button class="chip" data-prompt="Explain what the current file does."><span class="codicon codicon-book"></span>Explain this file</button>
       <button class="chip" data-prompt="Find bugs in the current file and fix them."><span class="codicon codicon-bug"></span>Find and fix bugs</button>
       <button class="chip" data-prompt="Write unit tests for the current file."><span class="codicon codicon-beaker"></span>Write tests</button>
     </div>
-    <p class="hint">Type <kbd>/</kbd> for commands · <kbd>@</kbd> to mention a file · <kbd>!</kbd> to run a shell command · paste or drop images<br><kbd>Shift+Tab</kbd> switches approval mode · <kbd>Esc</kbd> stops the agent</p>
+    <p class="hint">${t('Type <kbd>/</kbd> for commands · <kbd>@</kbd> to mention a file · <kbd>!</kbd> to run a shell command · paste or drop images')}<br>${t('<kbd>Shift+Tab</kbd> switches approval mode · <kbd>Esc</kbd> stops the agent')}</p>
   </div>
 </div>
 <div id="composer">
@@ -1662,6 +1851,8 @@ class ChatProvider {
     </div>
   </div>
 </div>
+<script nonce="${nonce}" type="application/json" id="l10n">${JSON.stringify(this.dictionary).replace(/</g, '\\u003c')}</script>
+<script nonce="${nonce}" src="${uri('l10n.js')}"></script>
 <script nonce="${nonce}" src="${uri('vendor/markdown-it.min.js')}"></script>
 <script nonce="${nonce}" src="${uri('main.js')}"></script>
 </body></html>`;
@@ -1693,6 +1884,8 @@ function activate(context) {
     vscode.commands.registerCommand('ompChat.manageModels', () => provider.showModelsSheet()),
     vscode.commands.registerCommand('ompChat.setApiKey', () => provider.manageKeys()),
     vscode.commands.registerCommand('ompChat.exportChat', () => provider.exportChat()),
+    vscode.commands.registerCommand('ompChat.commands', () => provider.showCommands()),
+    vscode.commands.registerCommand('ompChat.mcp', () => provider.showMcp()),
     vscode.commands.registerCommand('ompChat.addFile', (uri, all) => (Array.isArray(all) && all.length ? all : [uri || vscode.window.activeTextEditor?.document.uri]).forEach((u) => provider.pinFile(u)) || provider.reveal()),
     vscode.commands.registerCommand('ompChat.ask', () => provider.editorAction('ask')),
     vscode.commands.registerCommand('ompChat.explain', () => provider.editorAction('explain')),
@@ -1700,8 +1893,9 @@ function activate(context) {
     vscode.languages.registerCodeActionsProvider({ scheme: 'file' }, {
       provideCodeActions(doc, range, ctx) {
         if (!ctx.diagnostics.some((d) => d.severity <= 1)) return [];
-        const a = new vscode.CodeAction('Fix with OMP Chat', vscode.CodeActionKind.QuickFix);
-        a.command = { command: 'ompChat.fix', title: 'Fix with OMP Chat', arguments: [doc.uri, range] };
+        const title = provider.t('Fix with OMP Chat');
+        const a = new vscode.CodeAction(title, vscode.CodeActionKind.QuickFix);
+        a.command = { command: 'ompChat.fix', title, arguments: [doc.uri, range] };
         return [a];
       },
     }, { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }),
@@ -1714,4 +1908,4 @@ function activate(context) {
 
 function deactivate() {}
 
-module.exports = { activate, deactivate, _test: { toMarkdown, splitUserText, problemLines } };
+module.exports = { activate, deactivate, _test: { toMarkdown, splitUserText, problemLines, listCommandFiles, commandFileText, parseMcpList } };
