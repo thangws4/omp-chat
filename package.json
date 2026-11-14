@@ -2,7 +2,7 @@
   "name": "omp-chat",
   "displayName": "OMP Chat by DT",
   "description": "AI coding chat panel for VS Code, powered by the oh-my-pi (omp) agent and OpenRouter / DeepSeek models.",
-  "version": "0.4.2",
+  "version": "0.6.3",
   "publisher": "dtcode-dev",
   "icon": "media/logo.png",
   "engines": {
@@ -13,6 +13,9 @@
     "Chat"
   ],
   "main": "./extension.js",
+  "activationEvents": [
+    "onWebviewPanel:ompChat.tab"
+  ],
   "contributes": {
     "viewsContainers": {
       "activitybar": [
@@ -117,6 +120,29 @@
         "command": "ompChat.mcp",
         "title": "%command.mcp%",
         "category": "OMP Chat"
+      },
+      {
+        "command": "ompChat.newTab",
+        "title": "%command.newTab%",
+        "category": "OMP Chat",
+        "icon": "$(empty-window)"
+      },
+      {
+        "command": "ompChat.newWorktreeChat",
+        "title": "%command.newWorktreeChat%",
+        "category": "OMP Chat",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "ompChat.chats",
+        "title": "%command.chats%",
+        "category": "OMP Chat",
+        "icon": "$(list-unordered)"
+      },
+      {
+        "command": "ompChat.attention",
+        "title": "%command.attention%",
+        "category": "OMP Chat"
       }
     ],
     "menus": {
@@ -170,6 +196,21 @@
           "command": "ompChat.mcp",
           "when": "view == ompChat.view",
           "group": "2_chat@3"
+        },
+        {
+          "command": "ompChat.newTab",
+          "when": "view == ompChat.view",
+          "group": "0_chats@1"
+        },
+        {
+          "command": "ompChat.newWorktreeChat",
+          "when": "view == ompChat.view",
+          "group": "0_chats@2"
+        },
+        {
+          "command": "ompChat.chats",
+          "when": "view == ompChat.view",
+          "group": "0_chats@3"
         }
       ],
       "editor/context": [
@@ -198,6 +239,28 @@
         {
           "command": "ompChat.addFile",
           "group": "0_ompChat@1"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "ompChat.newSession",
+          "when": "activeWebviewPanelId == 'ompChat.tab'",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ompChat.history",
+          "when": "activeWebviewPanelId == 'ompChat.tab'",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ompChat.usage",
+          "when": "activeWebviewPanelId == 'ompChat.tab'",
+          "group": "navigation@3"
+        },
+        {
+          "command": "ompChat.chats",
+          "when": "activeWebviewPanelId == 'ompChat.tab'",
+          "group": "navigation@4"
         }
       ]
     },
@@ -233,6 +296,29 @@
           "default": "always-ask",
           "description": "%config.approvalMode%"
         },
+        "ompChat.thinkingLevel": {
+          "type": "string",
+          "enum": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "default": "high",
+          "description": "%config.thinkingLevel%"
+        },
+        "ompChat.announceSteps": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.announceSteps%"
+        },
+        "ompChat.notifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.notifications%"
+        },
         "ompChat.extraArgs": {
           "type": "array",
           "items": {
@@ -242,7 +328,20 @@
           "description": "%config.extraArgs%"
         }
       }
-    }
+    },
+    "keybindings": [
+      {
+        "command": "ompChat.focus",
+        "key": "ctrl+alt+o",
+        "mac": "cmd+alt+o"
+      },
+      {
+        "command": "ompChat.ask",
+        "key": "ctrl+alt+a",
+        "mac": "cmd+alt+a",
+        "when": "editorTextFocus"
+      }
+    ]
   },
   "scripts": {
     "test": "node --test \"test/*.test.js\""

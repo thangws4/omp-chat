@@ -25,5 +25,12 @@
   "config.approvalMode.write": "Tự duyệt sửa file; hỏi trước khi chạy lệnh.",
   "config.approvalMode.yolo": "Không bao giờ hỏi (mặc định của omp).",
   "config.approvalMode.plan": "Chế độ lập kế hoạch: chỉ đọc; agent viết kế hoạch và bạn duyệt trước khi có thay đổi.",
-  "config.extraArgs": "Tham số dòng lệnh thêm vào sau --mode rpc."
+  "config.thinkingLevel": "Effort: mức độ model suy nghĩ trước khi trả lời (minimal, low, medium, high, xhigh hoặc max; mặc định là high). Model không có khả năng suy luận sẽ bỏ qua. Thay đổi áp dụng ngay cho cuộc trò chuyện đang chạy.",
+  "config.announceSteps": "Yêu cầu agent nói việc sắp làm trước khi dùng công cụ, cập nhật ngắn khi đang làm và tóm tắt khi xong (giống Claude Code). Đổi cài đặt này sẽ khởi động lại omp và tiếp tục cuộc trò chuyện.",
+  "config.extraArgs": "Tham số dòng lệnh thêm vào sau --mode rpc.",
+  "command.newTab": "Mở chat trong tab mới",
+  "command.newWorktreeChat": "Chat mới trong git worktree…",
+  "command.chats": "Xem tất cả các chat",
+  "command.attention": "Đi tới chat đang cần bạn",
+  "config.notifications": "Hiện thông báo khi một chat cần bạn trả lời trong lúc chat bị ẩn hoặc VS Code đang ở nền, và khi chat làm xong trong lúc VS Code đang ở nền."
 }

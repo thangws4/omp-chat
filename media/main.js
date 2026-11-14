@@ -7,7 +7,7 @@
   try { window.ompL10n?.watch(window.ompL10n.compile(JSON.parse($('l10n')?.textContent || 'null')), document.body); }
   catch (e) { console.error('l10n', e); }
   const log = $('log'), welcome = $('welcome'), input = $('input'), popup = $('popup');
-  const sendBtn = $('send'), stopBtn = $('stop'), modelBtn = $('model'), modeSel = $('mode');
+  const sendBtn = $('send'), stopBtn = $('stop'), modelBtn = $('model'), modeBtn = $('mode');
   const ctxBox = $('ctx'), ctxLabel = $('ctxLabel'), ctxIcon = $('ctxIcon'), ctxEye = $('ctxEye');
 
   let turn = null;     // current assistant turn (everything until the next user message)
@@ -22,8 +22,13 @@
   let useContext = true;
   let contextLabel = null;
   let contextRel = null;
+  let contextFull = null;
   let pinned = [];     // files attached to every message: [{ rel, label }]
   let pending = [];    // images waiting to be sent: { mimeType, data (base64), url }
+
+  // Webview state survives reloads (per viewer convenience only: it can be missing).
+  const st = () => { try { return vscode.getState() || {}; } catch { return {}; } };
+  const saveState = (patch) => { try { vscode.setState({ ...st(), ...patch }); } catch { /* a convenience */ } };
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -127,17 +132,68 @@
       const wrap = el('div', 'codewrap');
       pre.before(wrap);
       wrap.appendChild(pre);
-      const b = el('button', 'icon copy');
-      b.title = 'Copy';
-      b.appendChild(icon('copy'));
-      b.onclick = () => {
-        navigator.clipboard.writeText(pre.querySelector('code')?.textContent ?? pre.textContent);
+      const code = () => pre.querySelector('code')?.textContent ?? pre.textContent;
+      const lang = /language-(\S+)/.exec(pre.querySelector('code')?.className || '')?.[1] || '';
+      const bar = el('div', 'codeacts');
+      const act = (name, title, fn) => {
+        const b = el('button', 'icon');
+        b.title = title;
+        b.setAttribute('aria-label', title);
+        b.appendChild(icon(name));
+        b.onclick = () => fn(b);
+        bar.appendChild(b);
+      };
+      act('insert', 'Insert at cursor', () => vscode.postMessage({ type: 'insertCode', code: code() }));
+      act('new-file', 'Open in new file', () => vscode.postMessage({ type: 'newFileFromCode', code: code(), lang }));
+      act('copy', 'Copy', (b) => {
+        navigator.clipboard.writeText(code());
         b.firstChild.className = 'codicon codicon-check';
         setTimeout(() => { b.firstChild.className = 'codicon codicon-copy'; }, 1200);
-      };
-      wrap.appendChild(b);
+      });
+      wrap.appendChild(bar);
+    }
+    linkFiles(e);
+  }
+
+  // `src/app.ts:42` in a reply opens that file at that line. The extension says which spans are real files.
+  const PATHISH = /^(?:[A-Za-z]:)?[\w.@~\/\\-]*\.[\w]{1,12}(?::\d+(?::\d+)?|#L\d+(?:-L?\d+)?)?$/;
+  function linkFiles(e) {
+    const refs = new Set();
+    for (const c of e.querySelectorAll('code')) {
+      const s = c.textContent.trim();
+      if (c.closest('pre') || s.length > 260 || !PATHISH.test(s)) continue;
+      c.classList.add('fcand');
+      refs.add(s);
+    }
+    for (const a of e.querySelectorAll('a[href]')) { // [text](src/a.ts#L3): a relative link means a file
+      const h = a.getAttribute('href');
+      if (!/^[a-z][\w+.-]*:|^#|^\/\//i.test(h)) { a.dataset.file = decodeURI(h); a.classList.add('flink'); }
+    }
+    if (refs.size) vscode.postMessage({ type: 'checkPaths', refs: [...refs] });
+  }
+  function markPaths(m) {
+    const refs = new Set(m.refs || []), ok = new Set(m.ok || []);
+    for (const c of log.querySelectorAll('code.fcand')) {
+      const s = c.textContent.trim();
+      if (!refs.has(s)) continue; // asked by a later reply: its answer is still coming
+      c.classList.remove('fcand');
+      if (!ok.has(s)) continue;
+      c.dataset.file = s;
+      c.classList.add('flink');
+      c.title = 'Open file';
+      c.tabIndex = 0;
+      c.setAttribute('role', 'link');
     }
   }
+  log.addEventListener('click', (e) => {
+    const f = e.target.closest?.('[data-file]');
+    if (!f) return;
+    e.preventDefault();
+    vscode.postMessage({ type: 'openFile', ref: f.dataset.file });
+  });
+  log.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.matches?.('code[data-file]')) vscode.postMessage({ type: 'openFile', ref: e.target.dataset.file });
+  });
   function endAssistant() { finish(cur); cur = null; curThink = null; }
 
   function setBusy(b) {
@@ -152,6 +208,9 @@
     text = (text ?? input.value).trim();
     if (!text && !pending.length) return;
     const images = pending.map(({ mimeType, data }) => ({ mimeType, data }));
+    if (text) sent = [...sent.filter((x) => x !== text), text].slice(-50);
+    histAt = -1;
+    saveState({ sent, draft: '' });
     input.value = '';
     updateShellMode();
     pending = [];
@@ -543,8 +602,10 @@
     sheet.onkeydown = null;
     sheet.className = '';
   }
+  // One overlay at a time: a sheet replaces any open list (history, models…), and those lists close the sheet.
   function openSheet(title, iconName, onRefresh) {
     closeSheet();
+    hidePicker();
     const head = el('div', 'uhead');
     head.append(icon(iconName), el('span', 'utitle', title), el('span', 'spacer'));
     if (onRefresh) {
@@ -994,9 +1055,12 @@
       parts.push(`5h ${r.status === 'rate-limited' ? 'full' : r.percent + '%'}`);
       tip.push(`Plan: ${r.percent}% of the 5-hour window used, ${resetsIn(r.resetsAt)}`);
     }
+    // Context fill as a small ring, like Claude Code's context indicator; the numbers are in the tooltip.
+    const ring = $('ring');
+    ring.hidden = !m.context;
     if (m.context) {
-      parts.push(Math.round(m.context.percent) + '%');
-      tip.push(`Context: ${num(m.context.tokens)} of ${num(m.context.contextWindow)} tokens`);
+      ring.style.setProperty('--p', Math.min(100, Math.round(m.context.percent)));
+      tip.unshift(`Context: ${Math.round(m.context.percent)}% (${num(m.context.tokens)} of ${num(m.context.contextWindow)} tokens)`);
     }
     if (m.free) {
       const f = freeCount(m);
@@ -1005,7 +1069,7 @@
     }
     $('meterText').textContent = parts.join(' · ');
     $('meter').title = [...tip, 'Click for usage & limits'].join('\n');
-    $('meter').hidden = !parts.length;
+    $('meter').hidden = !parts.length && !m.context;
     $('meter').classList.toggle('warn', (!!m.context && m.context.percent >= 80) || (!!r && (r.percent >= 80 || r.status === 'rate-limited')));
   }
 
@@ -1112,6 +1176,8 @@
     return (it.desc || '').toLowerCase().includes(q) ? 2 : -1;
   }
   function openPicker(kind, all, choose, query) {
+    // Lists you open from a button replace an open sheet; the @ and / lists while you type leave it alone.
+    if (kind === 'history' || kind === 'model' || kind === 'mode') closeSheet();
     pk = { kind, all, choose, active: 0 };
     filterPicker(query || '');
   }
@@ -1144,6 +1210,7 @@
         head.appendChild(manage);
       }
       popup.appendChild(head);
+      if (pk.kind === 'model') popup.appendChild(effortRow());
     }
     const list = el('div', 'plist');
     list.setAttribute('role', 'listbox');
@@ -1170,6 +1237,14 @@
         };
         row.appendChild(star);
       }
+      for (const a of it.actions || []) { // e.g. rename / delete a conversation
+        const b = el('button', 'icon pact');
+        b.title = a.title;
+        b.setAttribute('aria-label', a.title);
+        b.appendChild(icon(a.icon));
+        b.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); hidePicker(); vscode.postMessage(a.msg); };
+        row.appendChild(b);
+      }
       row.onmousedown = (e) => { e.preventDefault(); choosePicked(i); };
       list.appendChild(row);
     });
@@ -1195,6 +1270,10 @@
     } else if (e.key === 'Escape') {
       hidePicker();
       input.focus();
+    } else if (pk.kind === 'history' && (e.key === 'F2' || (e.key === 'Delete' && !pk.filter?.value))) {
+      const a = pk.items[pk.active].actions?.[e.key === 'F2' ? 0 : 1]; // Delete with filter text edits the filter
+      hidePicker();
+      if (a) vscode.postMessage(a.msg);
     } else return false;
     e.preventDefault();
     return true;
@@ -1204,14 +1283,7 @@
   function updateInlinePicker() {
     const before = input.value.slice(0, input.selectionStart);
     let m = /^\/(\S*)$/.exec(input.value);
-    if (m && commands.length) {
-      const all = commands.map((c) => ({ key: c.name, label: '/' + c.name, desc: c.hint ? `${c.hint} — ${c.description}` : c.description }));
-      const manage = { key: '\u0000commands', label: 'Your commands…', icon: 'settings-gear', desc: 'create, edit or delete your own / commands' };
-      return openPicker('slash', [...all, manage], (it) => {
-        if (it === manage) { input.value = ''; autosize(); return vscode.postMessage({ type: 'commandsSheet' }); }
-        input.value = '/' + it.key + ' '; input.focus(); autosize();
-      }, m[1]);
-    }
+    if (m && commands.length) return openSlash(m[1]);
     m = /(^|\s)@([^\s@]*)$/.exec(before);
     if (m) {
       const start = before.length - m[2].length - 1;
@@ -1219,6 +1291,20 @@
       return openPicker('file', files || [], insertFile, m[2]);
     }
     if (pk && !ownFilter(pk)) hidePicker();
+  }
+  // The / list: typed at the start of the box, or from the / button (which keeps what you already typed after it).
+  function openSlash(query, fromButton) {
+    const all = commands.map((c) => ({ key: c.name, label: '/' + c.name, desc: c.hint ? `${c.hint} — ${c.description}` : c.description }));
+    const manage = { key: '\u0000commands', label: 'Your commands…', icon: 'settings-gear', desc: 'create, edit or delete your own / commands' };
+    openPicker('slash', [...all, manage], (it) => {
+      const rest = input.value.replace(/^\/\S*\s*/, '');
+      if (it === manage) { input.value = rest; autosize(); return vscode.postMessage({ type: 'commandsSheet' }); }
+      input.value = '/' + it.key + ' ' + rest;
+      input.focus();
+      input.setSelectionRange(it.key.length + 2, it.key.length + 2);
+      autosize();
+    }, query);
+    if (fromButton) input.focus(); // ↑ ↓ Enter from the box
   }
   function insertFile(it) {
     const caret = input.selectionStart;
@@ -1242,7 +1328,9 @@
     return t >= today ? 'Today' : t >= today - day ? 'Yesterday' : t >= today - 7 * day ? 'Previous 7 days' : 'Older';
   }
   function showSessions(m) { // the list comes newest first
-    const all = m.list.map((x) => ({ key: x.title, label: x.title, desc: ago(x.when), icon: x.current ? 'check' : 'comment-discussion', file: x.file, group: dayGroup(x.when) }));
+    const all = m.list.map((x) => ({ key: x.title, label: x.title, desc: ago(x.when), icon: x.current ? 'check' : 'comment-discussion', file: x.file, group: dayGroup(x.when),
+      actions: [{ icon: 'edit', title: 'Rename (F2)', msg: { type: 'renameSession', file: x.file } },
+        { icon: 'trash', title: 'Delete (Del)', msg: { type: 'deleteSession', file: x.file } }] }));
     pk = null;
     openPicker('history', all, (it) => vscode.postMessage({ type: 'openSession', file: it.file }));
   }
@@ -1275,9 +1363,14 @@
   }
   function setContextOn(on) {
     useContext = on;
-    // The open file's chip: removed with ✕ (comes back when you open another file); hidden when it is pinned anyway.
-    $('ctxChip').hidden = !on || !contextLabel || pinned.some((p) => p.rel === contextRel);
-    ctxBox.hidden = $('ctxChip').hidden && !pinned.length;
+    // The open file in the toolbar, like Claude Code's footer: the eye says whether it goes with your message
+    // (click to toggle; a newly opened file is included again). Hidden when it is pinned anyway.
+    $('ctxChip').hidden = !contextLabel || pinned.some((p) => p.rel === contextRel);
+    $('ctxChip').classList.toggle('off', !on);
+    ctxIcon.className = 'codicon codicon-' + (on ? 'eye' : 'eye-closed');
+    ctxEye.title = `${contextFull || contextLabel || ''}\n${on ? 'Sent with your next message. Click to leave it out.' : 'Not sent. Click to include it.'}`;
+    ctxEye.setAttribute('aria-pressed', String(on));
+    ctxBox.hidden = !pinned.length;
   }
   function renderPinned() {
     const box = $('pinned');
@@ -1325,8 +1418,66 @@
   stopBtn.onclick = () => vscode.postMessage({ type: 'stop' });
   modelBtn.onclick = () => (pk?.kind === 'model' ? hidePicker() : vscode.postMessage({ type: 'pickModel' }));
   $('meter').onclick = () => vscode.postMessage({ type: 'usage' });
-  modeSel.onchange = () => vscode.postMessage({ type: 'setMode', mode: modeSel.value });
-  ctxEye.onclick = () => setContextOn(false);
+  // Approval mode and thinking level: compact pills that open a list in the popup (native <select>s are as wide as
+  // their longest option, which does not fit a narrow sidebar).
+  const MODES = [
+    { key: 'always-ask', short: 'Ask', label: 'Ask before edits', icon: 'shield', desc: 'asks before every file change and command' },
+    { key: 'always-ask-cached', short: 'Ask, remember', label: 'Ask & remember', icon: 'shield', desc: 'like Ask, and you can approve a file or folder for the session' },
+    { key: 'write', short: 'Edit auto', label: 'Edit automatically', icon: 'run-all', desc: 'edits files freely, asks before commands' },
+    { key: 'yolo', short: 'Full auto', label: 'Full auto', icon: 'zap', desc: 'never asks' },
+    { key: 'plan', short: 'Plan', label: 'Plan mode', icon: 'debug-pause', desc: 'reads and writes a plan, changes nothing' },
+  ];
+  // Effort (thinking), as in Claude Code's model picker: always on, high by default. minimal / xhigh are settings-only
+  // and show up in the row only while in use.
+  const EFFORTS = ['low', 'medium', 'high', 'max'];
+  const EFFORT_TIPS = { minimal: 'Fastest, least thinking', low: 'Quick answers, light thinking', medium: 'Balanced',
+    high: 'Thinks carefully (default)', xhigh: 'Thinks longer than high', max: 'Slowest, most thorough' };
+  let mode = 'always-ask', think = 'high';
+  function showMode(v) {
+    const m = MODES.find((x) => x.key === v) || MODES[0];
+    mode = m.key;
+    $('modeIcon').className = `codicon codicon-${m.icon}`;
+    $('modeLabel').textContent = m.short;
+    modeBtn.title = `${m.label}: ${m.desc} (Shift+Tab)`;
+    modeBtn.dataset.mode = m.key; // Full auto and Plan are coloured, so you notice them
+  }
+  function showThink(v) {
+    think = EFFORT_TIPS[v] ? v : 'high';
+    $('effort').textContent = ` · ${think}`; // "deepseek-v4-flash · high", like "Sonnet · high"
+  }
+  function setThink(v) { showThink(v); vscode.postMessage({ type: 'setThinking', level: think }); }
+  // The Effort row at the top of the model picker.
+  function effortRow() {
+    const row = el('div', 'peffort');
+    row.appendChild(el('span', 'elabel', 'Effort'));
+    const seg = el('div', 'segs');
+    seg.setAttribute('role', 'radiogroup');
+    for (const k of EFFORTS.includes(think) ? EFFORTS : [...EFFORTS, think]) {
+      const b = el('button', 'seg' + (k === think ? ' on' : ''), k);
+      b.title = EFFORT_TIPS[k];
+      b.setAttribute('role', 'radio');
+      b.setAttribute('aria-checked', String(k === think));
+      b.onmousedown = (e) => { e.preventDefault(); setThink(k); renderPicker(); }; // the filter keeps the focus
+      seg.appendChild(b);
+    }
+    row.appendChild(seg);
+    return row;
+  }
+  function setMode(v) { showMode(v); vscode.postMessage({ type: 'setMode', mode }); }
+  // A short list in the popup; ↑ ↓ Enter work from the message box, which keeps the focus.
+  function openChoices(kind, list, cur, choose) {
+    if (pk?.kind === kind) return hidePicker();
+    openPicker(kind, list.map((x) => ({ key: x.key, label: x.label, desc: x.desc, icon: x.key === cur ? 'check' : x.icon || 'blank' })), (it) => choose(it.key));
+    pk.active = Math.max(0, list.findIndex((x) => x.key === cur));
+    renderPicker();
+    input.focus();
+  }
+  for (const b of [modeBtn, modelBtn, $('slash'), $('attach')]) b.onmousedown = (e) => e.preventDefault(); // keep the caret in the box
+  modeBtn.onclick = () => openChoices('mode', MODES, mode, setMode);
+  $('slash').onclick = () => (pk?.kind === 'slash' ? hidePicker() : openSlash('', true));
+  showMode(mode);
+  showThink(think);
+  ctxEye.onclick = () => setContextOn(!useContext);
   $('ctxPin').onclick = () => contextRel && vscode.postMessage({ type: 'pinFile', rel: contextRel });
   $('attach').onclick = () => {
     const p = input.selectionStart;
@@ -1356,26 +1507,55 @@
 
   // Claude Code keys: Shift+Tab cycles the approval mode, Esc stops the agent.
   function cycleMode() {
-    const opts = [...modeSel.options].map((o) => o.value);
-    modeSel.value = opts[(opts.indexOf(modeSel.value) + 1) % opts.length];
-    modeSel.onchange();
+    setMode(MODES[(MODES.findIndex((x) => x.key === mode) + 1) % MODES.length].key);
   }
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && busy && !pk && !openForm) { e.preventDefault(); vscode.postMessage({ type: 'stop' }); }
   });
 
+  // ↑ / ↓ in an empty box (or on a recalled message you have not edited) walk through what you sent, like a shell.
+  let sent = Array.isArray(st().sent) ? st().sent : [];
+  let histAt = -1; // index into sent while browsing, -1 otherwise
+  function recall(e) {
+    const up = e.key === 'ArrowUp';
+    if ((!up && e.key !== 'ArrowDown') || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || !sent.length) return false;
+    const browsing = histAt >= 0 && input.value === sent[histAt];
+    if (!browsing && input.value) return false;
+    if (!browsing) histAt = -1;
+    // Inside a recalled multi-line message the arrows still move the caret, until it reaches the first / last line.
+    const v = input.value, p = input.selectionStart;
+    if (up ? v.lastIndexOf('\n', p - 1) >= 0 : v.indexOf('\n', p) >= 0) return false;
+    if (!up && histAt < 0) return false;
+    histAt = up ? (histAt < 0 ? sent.length - 1 : Math.max(0, histAt - 1)) : histAt + 1;
+    if (histAt >= sent.length) histAt = -1;
+    input.value = histAt < 0 ? '' : sent[histAt];
+    const end = up ? 0 : input.value.length; // land where the next press keeps going
+    input.setSelectionRange(end, end);
+    autosize();
+    updateShellMode();
+    e.preventDefault();
+    return true;
+  }
+
   input.addEventListener('keydown', (e) => {
     if (pk && !ownFilter(pk) && pickerKeys(e)) return;
+    if (recall(e)) return;
     if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); return cycleMode(); }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   });
   // A leading "!" switches the box to shell mode, like Claude Code's bash mode.
+  // ... and a leading "#" (one line) saves a note to the project's memory, like Claude Code's # shortcut.
   function updateShellMode() {
     const on = /^!/.test(input.value);
+    const mem = /^#(?!#)/.test(input.value) && !input.value.includes('\n');
     $('box').classList.toggle('shellmode', on);
+    $('box').classList.toggle('memmode', mem);
     $('shellHint').hidden = !on;
+    $('memHint').hidden = !mem;
   }
-  input.addEventListener('input', () => { autosize(); updateShellMode(); if (pk) pk.active = 0; updateInlinePicker(); });
+  input.addEventListener('input', () => { autosize(); updateShellMode(); if (pk) pk.active = 0; updateInlinePicker(); saveState({ draft: input.value }); });
+  // What you were typing comes back after a reload.
+  if (st().draft) { input.value = st().draft; autosize(); updateShellMode(); }
   input.addEventListener('click', updateInlinePicker); // caret moved into / out of a mention
   input.addEventListener('blur', () => setTimeout(() => { if (pk && !ownFilter(pk)) hidePicker(); }, 150));
 
@@ -1565,20 +1745,22 @@
         modelBtn.title = `Model: ${name} (click to change)`;
         break;
       }
-      case 'mode': modeSel.value = m.mode; break;
+      case 'mode': showMode(m.mode); break;
+      case 'thinking_level': showThink(m.level || ''); break;
+      case 'paths': markPaths(m); break;
+      case 'session': saveState({ session: { file: m.file, worktree: m.worktree || null } }); break; // a tab reopens it after a reload
       case 'meter': showMeter(m); break;
       case 'usage': showUsage(m); break;
       case 'commands': commands = m.list || []; break;
       case 'context':
         if (m.label !== contextLabel) useContext = true;
         contextLabel = m.label;
+        contextFull = m.full || m.label;
         contextRel = m.rel || null;
         pinned = m.pinned || [];
         renderPinned();
-        setContextOn(useContext);
         ctxLabel.textContent = m.label || '';
-        $('ctxChip').title = `${m.full || m.label || ''}\nSent with your next message.`;
-        ctxIcon.className = 'codicon codicon-' + (m.selection ? 'selection' : 'file');
+        setContextOn(useContext);
         break;
       case 'files':
         files = [

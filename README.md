@@ -91,18 +91,24 @@ While the agent is working, a new message is **queued**: it waits above the box,
 
 When the agent keeps a to-do list, it is pinned above the box (**Todos 2/5**): ✓ done, ⟳ in progress, ○ to do. Click the header to fold it.
 
+The bar under the box is laid out like Claude Code's: on the left the approval mode and the open file; on the right the context ring, the model with its effort (`deepseek-v4-flash · high`), `/` for commands, `@` to mention a file, and send. In a narrow sidebar the labels fold into icons; their tooltips still say everything.
+
 | In the message box | What it does |
 |---|---|
-| File chip (📄 `calc.py`) above the box | The open file is sent with your message. If you select code, the chip shows the line range and the selected code is sent. Click ✕ on the chip to leave it out; it comes back when you open another file or select code |
-| 📌 on the file chip | Keeps that file attached to every message, even after you switch files. Pinned files show as their own chips; ✕ removes one. Also: right-click a file in the Explorer (or an editor tab) → **Add File to OMP Chat** |
+| 👁 file name in the bar | The open file is sent with your message. If you select code, it shows the line range and the selected code is sent. Click it to leave the file out (struck through) or put it back; a newly opened file is included again |
+| 📌 next to the file name (on hover) | Keeps that file attached to every message, even after you switch files. Pinned files show as their own chips; ✕ removes one. Also: right-click a file in the Explorer (or an editor tab) → **Add File to OMP Chat** |
 | `@` | Lists workspace files as you type (`@cal…`). **↑ ↓** to move, **Enter** or **Tab** to insert, **Esc** to close. The `@` button does the same |
 | `@problems` | Sends the errors and warnings from VS Code's **Problems** panel with your message |
 | `@terminal` | Sends the recent output of the active terminal (copied through the clipboard, which is put back afterwards) |
 | Images | Paste with **Ctrl+V**, drop onto the box, or use the 🖼 button. Up to 5 per message; large images are scaled down. The model must support images |
 | `/` | Lists omp's slash commands, for example `/session`, `/compact`, `/retry`, `/mcp` |
 | `!` | Runs the rest as a shell command in the workspace (the box switches to shell mode). See [Terminal](#terminal) |
+| `#` | Saves the rest of the line to the project's memory (`AGENTS.md`) instead of sending it. See [Memory](#memory) |
+| ↑ / ↓ in an empty box | Brings back the messages you sent before, like a shell. What you are typing is kept if the window reloads |
 
 The suggestions on the start screen (**Explain this file**, **Find and fix bugs**, **Write tests**) send a ready-made request about the open file.
+
+In replies, a file path such as `src/app.ts:42` is a link: click it to open the file at that line. Code blocks have **Insert at cursor** (into the editor you were last in), **Open in new file** and **Copy**.
 
 Under each finished reply: 📋 copies the whole answer as Markdown, followed by what the turn used, for example `13k in · 312 out · $0.0021 · 14s` (tokens sent and received, cost as priced by omp, time).
 
@@ -122,7 +128,7 @@ You can see what the agent is doing even with the panel closed:
 | Finished while the panel was hidden | 🔵 done | badge ① | OMP: done |
 | Idle | | | hidden |
 
-Click the status bar item to open the chat. Opening the panel clears "done".
+Click the status bar item to open the chat (with several chats, the one that needs you). Opening the panel clears "done".
 
 ### Approvals
 
@@ -167,7 +173,7 @@ omp can hand parts of a job to **subagents** (its `task` tool): helpers with the
 
 ### Models
 
-Click the model name in the toolbar to open the model list. Type to filter (`free`, `deepseek`, `kimi`…). Badges say **free**, **Go plan** (needs the OpenCode Go subscription) or **used up** (free allowance spent, with the time until it resets).
+Click the model name in the toolbar to open the model list. Its **Effort** row sets how much the model thinks before answering: `low`, `medium`, `high` (the default) or `max`, as in Claude Code; the choice shows after the model name and applies to the running conversation. Models without reasoning ignore it. Type to filter (`free`, `deepseek`, `kimi`…). Badges say **free**, **Go plan** (needs the OpenCode Go subscription) or **used up** (free allowance spent, with the time until it resets).
 
 **Your models**: the model list in the chat shows only your models (★) plus the one in use. **Manage models…** (last entry of that list, or **…** → **Manage Models…**) shows every model omp can run, with a filter (try `free`, `deepseek`, `kimi`): click ☆ to add a model to your models, **Use** to switch to it. Your models sit on top, where ↑ ↓ set their order and ✕ removes one. Your models are kept across workspaces.
 
@@ -186,12 +192,33 @@ The longer conversation is kept as an earlier chat (🕘). In a reopened convers
 
 ### Conversations
 
-- Reloading the window reopens the last conversation of the workspace.
+- Reloading the window reopens the last conversation of the workspace. If the agent was in the middle of a turn when the window closed, the chat says so and offers **Continue**.
 - **+** (title bar) starts a new chat.
-- **🕘** (title bar) lists earlier conversations of this workspace; type to filter, **Enter** to open. Their diffs and **Undo** buttons work again.
+- **🕘** (title bar) lists earlier conversations of this workspace; type to filter, **Enter** to open. Their diffs and **Undo** buttons work again. ✏ (**F2**) renames a conversation, 🗑 (**Del**) moves it to the trash.
 - **…** → **Export Chat as Markdown** opens the conversation as a Markdown document (your messages, replies, tool calls and shell commands) to save or share.
 
 Conversations are stored by omp in `~/.omp/agent/sessions/`.
+
+When the context window is 80% full, the chat suggests **Compact now** (`/compact`): omp replaces the older part of the conversation with a summary and frees the space.
+
+### Several chats at once
+
+Like running several agents side by side in herdr, you can have more than one chat working at the same time. Each has its own omp and conversation.
+
+- **…** → **Open Chat in New Tab**: a chat in an editor tab, next to your code. Its title shows its state (🟡 working, 🔴 waiting for you, 🔵 done); its tab bar has New chat, Chats and Usage.
+- **…** → **New Chat in Git Worktree…**: the same, but the chat works on its own branch, checked out in a separate folder next to the project (`<project>.worktrees/<branch>`), so its edits never touch your files or another chat's. When you close the tab, a worktree with no changes is removed with its branch; one with changes is kept so you can review and merge the branch.
+- **…** → **Show All Chats** lists every chat with its state and model; pick one to go to it.
+- The status bar sums them up (*OMP: needs you · 2 chats*); clicking it goes to the chat that needs you.
+- Tabs come back after a reload with their conversation.
+- Settings (model, approval mode, keys) are shared by all chats.
+
+### Notifications
+
+When a chat asks for your answer while it is hidden or VS Code is in the background, or finishes while VS Code is in the background, a VS Code notification says so, with **Open**. Turn it off with `ompChat.notifications`.
+
+### Memory
+
+Start a one-line message with `#` to save a note for the agent instead of sending it, as in Claude Code: `# use pnpm, not npm`. It is added to the project's `AGENTS.md` (or `CLAUDE.md`, if that is the one the project has), which omp reads at the start of every conversation. The current conversation is told right away.
 
 ## 5. API keys and limits
 
@@ -207,7 +234,7 @@ When a request fails because a limit or credit ran out (HTTP 429 / 402, "rate li
 
 ### Usage & limits
 
-Open it with the 📊 button in the title bar or the gauge in the toolbar (`5h 37% · 10%`).
+Open it with the 📊 button in the title bar or the context ring in the toolbar (with the OpenCode Go plan it also shows `5h 37%`; hover for the numbers).
 
 | Section | Shows |
 |---|---|
@@ -272,6 +299,9 @@ Type `/` to see everything available on your machine.
 | Setting | Default | |
 |---|---|---|
 | `ompChat.model` | `openrouter/baidu/ernie-5.5-flash-preview:free` | Model as `provider/model`; the model picker writes this |
+| `ompChat.thinkingLevel` | `high` | Effort: `minimal`, `low`, `medium`, `high`, `xhigh` or `max`. Also the **Effort** row of the model list; it applies to the running conversation |
+| `ompChat.notifications` | `true` | Notify when a chat needs you or finishes while you are elsewhere |
+| `ompChat.announceSteps` | `true` | The agent says what it is about to do before it uses tools, gives short updates while it works and sums up at the end, as in Claude Code (added to omp's system prompt; a `--append-system-prompt` in `extraArgs` replaces it) |
 | `ompChat.approvalMode` | `always-ask` | `always-ask`, `always-ask-cached`, `write`, `yolo` or `plan` (the toolbar modes above) |
 | `ompChat.ompPath` | `omp` | Path to the omp executable |
 | `ompChat.extraArgs` | `[]` | Extra omp command-line arguments |
@@ -294,11 +324,23 @@ Type `/` to see everything available on your machine.
 | OMP Chat: Add File to OMP Chat | Right-click a file in the Explorer or an editor tab |
 | OMP Chat: Ask / Explain / Fix with OMP Chat | Right-click in the editor; Fix also in the light bulb |
 | OMP Chat: Stop Agent | **■** / **Esc** |
+| OMP Chat: Open Chat in New Tab | **…** menu |
+| OMP Chat: New Chat in Git Worktree… | **…** menu |
+| OMP Chat: Show All Chats | **…** menu, or the tab's title bar |
+| OMP Chat: Go to the Chat That Needs You | Status bar item |
+
+| Key | Anywhere |
+|---|---|
+| Ctrl+Alt+O (⌘⌥O) | Open the chat |
+| Ctrl+Alt+A (⌘⌥A) | In the editor: ask OMP Chat about the file or selection |
+
+Change them in **Keyboard Shortcuts** (search `OMP Chat`).
 
 | Key | In the message box |
 |---|---|
 | Enter / Shift+Enter | Send / new line |
 | `!` at the start | Shell mode: run the message as a command |
+| ↑ / ↓ | Earlier messages you sent (in an empty box) |
 | Shift+Tab | Next approval mode |
 | Esc | Stop the agent (or close an open list) |
 | ↑ ↓, Enter, Tab | Move and pick in `/`, `@`, model and chat lists |

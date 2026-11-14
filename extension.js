@@ -41,7 +41,14 @@ function findOmp() {
 // Left side of the diff view: the file as it was before an omp edit (omp-orig:/<name>?<editId>).
 const ORIG_SCHEME = 'omp-orig';
 // Settings that only take effect when omp is respawned (the model switches live via set_model).
-const RESTART_KEYS = ['approvalMode', 'ompPath', 'extraArgs'];
+const RESTART_KEYS = ['approvalMode', 'ompPath', 'extraArgs', 'announceSteps'];
+
+// Appended to omp's system prompt (ompChat.announceSteps): say what you are about to do, as Claude Code does.
+const ANNOUNCE_STEPS = `# Keeping the user informed
+- Before your first tool call, say in one short sentence what you are about to do and why, e.g. "I'll read the config loader to see where the port is set."
+- While working, write one short line when you learn something that changes the plan, find the cause, or move to a new phase of the work. Do not narrate every tool call or repeat yourself.
+- When you finish, give a brief summary: what you changed or found, and anything left for the user to do.
+- Write these updates in the language the user writes in.`;
 
 const LAST_SESSION = 'ompChat.lastSession'; // workspaceState key: session file to resume on reload
 // Webview messages that can change the agent status shown outside the chat.
@@ -61,6 +68,37 @@ const STATUS_UI = {
   done: { title: '🔵 done', badge: 'OMP Chat finished while you were away', bar: '$(check) OMP: done' },
   idle: { title: '', badge: null, bar: '' },
 };
+// Thinking effort, as Claude Code's "Effort": always on, high unless you pick another. Older settings ("" = omp's
+// default, "off") count as high.
+const EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const thinkingLevel = (cfg) => (EFFORTS.includes(cfg.get('thinkingLevel')) ? cfg.get('thinkingLevel') : 'high');
+const STATUS_RANK ={ blocked: 3, working: 2, done: 1, idle: 0 };
+const STATUS_ICON = { blocked: '$(bell-dot)', working: '$(sync~spin)', done: '$(check)', idle: '$(circle-outline)' };
+const TAB_TYPE = 'ompChat.tab';
+
+// Every open chat (the sidebar's and each tab's), like herdr's panes: one status bar item sums them up.
+const chats = new Set();
+let statusItem = null;
+const byStatus = () => [...chats].map((c) => ({ c, s: c.agentStatus() })).sort((a, b) => STATUS_RANK[b.s] - STATUS_RANK[a.s]);
+function refreshStatusBar() {
+  if (!statusItem) return;
+  const all = byStatus();
+  const top = all[0];
+  if (!top || top.s === 'idle') return statusItem.hide();
+  const { c, s } = top;
+  const info = STATUS_UI[s];
+  const subs = c.runningSubagents();
+  const active = all.filter((x) => x.s !== 'idle').length;
+  statusItem.text = c.t(info.bar) + (subs && s === 'working' ? ` · ${c.t(`${subs} subagent${subs > 1 ? 's' : ''}`)}` : '')
+    + (active > 1 ? ` · ${c.t(`${active} chats`)}` : '');
+  statusItem.tooltip = `${c.t(info.badge || 'OMP Chat is working')}${c.modelName ? ` · ${c.modelName}` : ''} ${c.t('(click to open)')}`;
+  statusItem.backgroundColor = s === 'blocked' ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
+  statusItem.show();
+}
+
+const windowFocused = () => vscode.window.state?.focused !== false;
+const git = (args, cwd) => new Promise((resolve, reject) => require('child_process').execFile('git', args, { cwd, timeout: 60000 },
+  (e, out, err) => (e ? reject(new Error(String(err || e.message).trim())) : resolve(String(out).trim()))));
 // Prepended to each message in plan mode; edits and commands are also denied at approval time.
 const PLAN_NOTE = '[Plan mode: investigate with read-only tools and reply with a concrete, numbered plan for the change. '
   + 'Do not edit files or run commands; such requests will be denied. The user will approve the plan before you carry it out.]';
@@ -225,9 +263,36 @@ function sessionSummary(file) {
   return { title: (title || first).replace(/\s+/g, ' ').trim().slice(0, 90) };
 }
 
+// "src/a.ts:12:3", "src/a.ts#L12-L20" or "src/a.ts" -> { file, line, col }.
+function parseFileRef(ref) {
+  const m = /^(.*?)(?::(\d+)(?::(\d+))?|#L(\d+)(?:-L?\d+)?)?$/.exec(String(ref).trim());
+  return { file: m[1], line: +(m[2] || m[4] || 0), col: +(m[3] || 0) };
+}
+
+// omp's session files start with a space-padded title line it rewrites in place; we do the same, at the same length,
+// so the lines omp appends meanwhile are never touched. Returns null if the title does not fit.
+function titleHeader(oldLine, title) {
+  let h;
+  try { h = JSON.parse(oldLine); } catch { return null; }
+  if (h?.type !== 'title') return null;
+  const base = { ...h, title, updatedAt: new Date().toISOString(), pad: '' };
+  const fill = Buffer.byteLength(oldLine) - Buffer.byteLength(JSON.stringify(base));
+  return fill < 0 ? null : JSON.stringify({ ...base, pad: ' '.repeat(fill) });
+}
+
+// Markdown fence names -> VS Code language ids, for "New file" from a code block.
+const LANG_IDS = { js: 'javascript', jsx: 'javascriptreact', ts: 'typescript', tsx: 'typescriptreact', py: 'python', sh: 'shellscript',
+  bash: 'shellscript', zsh: 'shellscript', shell: 'shellscript', ps1: 'powershell', pwsh: 'powershell', md: 'markdown', yml: 'yaml',
+  rs: 'rust', cs: 'csharp', rb: 'ruby', kt: 'kotlin', 'c++': 'cpp', golang: 'go' };
+
 class ChatProvider {
-  constructor(context) {
+  // opts.tab: a chat in an editor tab (its own omp; does not take over the sidebar's last conversation).
+  // opts.worktree: { top, branch, base, path, cwd } when the tab works in its own git worktree.
+  constructor(context, opts = {}) {
     this.context = context;
+    this.tab = !!opts.tab;
+    this.title = opts.title || 'OMP Chat';
+    this.worktree = opts.worktree || null;
     this.dictionary = loadDictionary(context.extensionUri?.fsPath || '');
     this.dict = l10n.compile(this.dictionary);
     this.view = null;
@@ -287,8 +352,8 @@ class ChatProvider {
       await this.context.globalState?.update('ompChat.keyPrompted', true);
       this.addKeyForm(true); // in the panel, alongside omp starting up
     }
-    // Pick up where the last window left off (New starts a fresh one).
-    const last = this.context.workspaceState.get(LAST_SESSION);
+    // Pick up where the last window left off (New starts a fresh one). Tabs bring their own (see openTab).
+    const last = this.tab ? null : this.context.workspaceState.get(LAST_SESSION);
     if (!this.client && last && sessionSummary(last)) this.resume = { file: last, replay: true };
     await this.ensureClient();
     this.listSkills().catch(() => {}); // warm the skill list so auto-pick does not delay the first message
@@ -303,7 +368,11 @@ class ChatProvider {
   // 🔴 waiting for you (an approval or question is open) · 🟡 working · 🔵 done while you weren't looking · 🟢 idle
   onStatusEvent(type) {
     if (type === 'busy') { this.working = true; this.unseenDone = false; }
-    if (type === 'idle') { if (this.working && !this.view?.visible) this.unseenDone = true; this.working = false; }
+    if (type === 'idle') {
+      if (this.working && !this.view?.visible) this.unseenDone = true;
+      if (this.working && !windowFocused()) this.notify('done');
+      this.working = false;
+    }
     if (type === 'clear') this.unseenDone = false;
     this.refreshStatus();
   }
@@ -395,14 +464,18 @@ class ChatProvider {
       this.view.description = this.t(info.title);
       this.view.badge = info.badge ? { value: 1, tooltip: this.t(info.badge) } : undefined;
     }
-    const item = this.statusItem;
-    if (!item) return;
-    if (s === 'idle') return item.hide();
-    const subs = this.runningSubagents();
-    item.text = this.t(info.bar) + (subs && s === 'working' ? ` · ${this.t(`${subs} subagent${subs > 1 ? 's' : ''}`)}` : '');
-    item.tooltip = `${this.t(info.badge || 'OMP Chat is working')}${this.modelName ? ` · ${this.modelName}` : ''} ${this.t('(click to open)')}`;
-    item.backgroundColor = s === 'blocked' ? new vscode.ThemeColor('statusBarItem.warningBackground') : undefined;
-    item.show();
+    if (s === 'blocked' && this.lastStatus !== 'blocked' && !(windowFocused() && this.view?.visible)) this.notify('blocked');
+    this.lastStatus = s;
+    refreshStatusBar();
+  }
+
+  // A VS Code notification when the agent needs you or finished while you were elsewhere (herdr's alerts).
+  notify(kind) {
+    if (!vscode.workspace.getConfiguration('ompChat').get('notifications', true)) return;
+    const open = this.t('Open');
+    const text = `${this.title}: ${this.t(kind === 'blocked' ? 'waiting for your answer' : 'finished')}`;
+    const show = kind === 'blocked' ? vscode.window.showWarningMessage : vscode.window.showInformationMessage;
+    Promise.resolve(show?.call(vscode.window, text, open)).then((pick) => pick === open && this.reveal(), () => {});
   }
 
   // ---- in-panel UI: everything is asked and shown inside the chat view, not in VS Code pop-ups ----
@@ -493,8 +566,10 @@ class ChatProvider {
   sync() {
     this.post({ type: 'mode', mode: vscode.workspace.getConfiguration('ompChat').get('approvalMode') });
     this.post({ type: 'model', name: this.modelName || vscode.workspace.getConfiguration('ompChat').get('model') });
+    this.post({ type: 'thinking_level', level: thinkingLevel(vscode.workspace.getConfiguration('ompChat')) });
     this.post({ type: 'commands', list: this.commands });
     this.postContext();
+    this.postSession();
   }
 
   async onWebviewMessage(m) {
@@ -510,6 +585,18 @@ class ChatProvider {
       case 'setModel': return vscode.workspace.getConfiguration('ompChat').update('model', m.id, vscode.ConfigurationTarget.Global);
       case 'history': return this.pickSession();
       case 'openSession': return this.openSession(m.file);
+      case 'renameSession': return this.renameSession(m.file);
+      case 'deleteSession': return this.deleteSession(m.file);
+      case 'openFile': return this.openFile(m.ref);
+      case 'checkPaths': { // which `path` spans in a reply are real files, so the panel can make them links
+        const refs = (Array.isArray(m.refs) ? m.refs : []).slice(0, 200).map(String);
+        return this.post({ type: 'paths', refs, ok: refs.filter((r) => this.resolveFile(parseFileRef(r).file)) });
+      }
+      case 'insertCode': return this.insertCode(String(m.code ?? ''));
+      case 'newFileFromCode': return this.newFileFromCode(String(m.code ?? ''), String(m.lang || ''));
+      case 'setThinking':
+        if (!EFFORTS.includes(m.level)) return;
+        return vscode.workspace.getConfiguration('ompChat').update('thinkingLevel', m.level, vscode.ConfigurationTarget.Global);
       case 'usage': return this.showUsage();
       case 'setApiKey': return this.manageKeys();
       case 'addKey': return this.addKeyForm(false, m.provider);
@@ -552,6 +639,9 @@ class ChatProvider {
           case 'openUrl': return vscode.env.openExternal(vscode.Uri.parse(m.arg));
           case 'setModel': return vscode.workspace.getConfiguration('ompChat').update('model', m.arg, vscode.ConfigurationTarget.Global);
           case 'revertForce': return this.revert(m.arg, true);
+          case 'openFile': return this.openFile(m.arg);
+          case 'continueTurn': return this.send('Continue where you left off.');
+          case 'compact': return this.send('/compact');
         }
         return;
       case 'setMode':
@@ -572,11 +662,13 @@ class ChatProvider {
     const env = { ...process.env, ...(await keys.envFor(this.context)) };
     // Read config after the awaits so a setting changed meanwhile is picked up.
     const cfg = vscode.workspace.getConfiguration('ompChat');
-    this.cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
+    this.cwd = this.worktree?.cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
 
     // Plan mode is OMP Chat's own (omp's /plan is terminal-only): omp asks for every edit/command and we deny them.
     const mode = cfg.get('approvalMode') === 'plan' ? 'always-ask' : cfg.get('approvalMode');
-    const args = ['--mode', 'rpc', '--model', cfg.get('model'), ...(mode ? ['--approval-mode', mode] : []), ...this.overlayArgs(), ...cfg.get('extraArgs', [])];
+    const args = ['--mode', 'rpc', '--model', cfg.get('model'), ...(mode ? ['--approval-mode', mode] : []), `--thinking=${thinkingLevel(cfg)}`,
+      ...(cfg.get('announceSteps', true) ? [`--append-system-prompt=${ANNOUNCE_STEPS}`] : []), // a later one in extraArgs wins
+      ...this.overlayArgs(), ...cfg.get('extraArgs', [])];
     const ompPath = cfg.get('ompPath') || 'omp';
     const fallback = ompPath === 'omp' ? this.ompFallback : null;
     const command = fallback ? fallback.omp : ompPath;
@@ -610,7 +702,11 @@ class ChatProvider {
       this.resume = null;
       try {
         await client.request({ type: 'switch_session', sessionPath: file });
-        if (replay) this.replay((await client.request({ type: 'get_messages' })).messages);
+        if (replay) {
+          const { messages } = await client.request({ type: 'get_messages' });
+          this.replay(messages);
+          this.offerContinue(messages);
+        }
       } catch (e) {
         if (this.client !== client) this.resume = { file, replay }; // omp failed to start: keep it for the retry
         else this.post({ type: 'error', text: `Could not resume the conversation: ${e.message}` });
@@ -659,10 +755,42 @@ class ChatProvider {
       const s = await client.request({ type: 'get_state' });
       this.setModel(s.model);
       this.post({ type: 'todos', phases: s.todoPhases || [] });
-      if (s.sessionFile) await this.context.workspaceState.update(LAST_SESSION, s.sessionFile);
+      this.sessionFile = s.sessionFile;
+      this.postSession();
+      if (s.sessionFile && !this.tab) await this.context.workspaceState.update(LAST_SESSION, s.sessionFile);
       this.refreshMeter();
       return s;
     } catch { return null; }
+  }
+
+  // The tab keeps this in its webview state, so it can reopen the same conversation (and worktree) after a reload.
+  postSession() {
+    if (this.sessionFile) this.post({ type: 'session', file: this.sessionFile, title: this.title, worktree: this.worktree });
+  }
+
+  // omp's --restore (go on with an interrupted turn) is terminal-only; in RPC mode we offer it instead. A turn the
+  // window closed on ends with your message or a tool result; Stop ends with an aborted reply, so it is not offered.
+  offerContinue(messages) {
+    const last = Array.isArray(messages) ? messages[messages.length - 1] : null;
+    if (last?.role !== 'user' && last?.role !== 'toolResult') return;
+    this.post({ type: 'notice', text: 'The last turn was cut off before it finished (the window closed or omp stopped).',
+      actions: [{ label: 'Continue', cmd: 'continueTurn' }] });
+  }
+
+  // "# note" (Claude Code's memory shortcut): appended to the project's AGENTS.md (or CLAUDE.md if that is what it
+  // has), which omp reads at the start of every conversation; this conversation is told right away.
+  remember(note) {
+    const dir = this.cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!dir) return this.post({ type: 'error', text: 'Open a folder first: memory is saved in its AGENTS.md.' });
+    const file = ['AGENTS.md', 'CLAUDE.md'].map((f) => path.join(dir, f)).find((f) => fs.existsSync(f)) || path.join(dir, 'AGENTS.md');
+    try {
+      const old = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
+      fs.appendFileSync(file, `${old && !old.endsWith('\n') ? '\n' : ''}- ${note}\n`);
+    } catch (e) {
+      return this.post({ type: 'error', text: `Could not save to ${path.basename(file)}: ${e.message}` });
+    }
+    this.notes.push(`[The user added this to the project memory (${path.basename(file)}): ${note}]`);
+    this.post({ type: 'notice', text: `Saved to ${path.basename(file)}: ${note}`, actions: [{ label: 'Open', cmd: 'openFile', arg: file }] });
   }
 
   // Rebuild the chat log from omp's stored messages by replaying them as live events,
@@ -713,7 +841,7 @@ class ChatProvider {
     const client = await this.ensureClient();
     const state = await this.track(client);
     if (!state?.sessionFile) return;
-    const dir = path.dirname(state.sessionFile);
+    const dir = this.sessionDir = path.dirname(state.sessionFile);
     let files = [];
     try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => path.join(dir, f)); } catch {}
     const list = files
@@ -743,6 +871,85 @@ class ChatProvider {
       this.post({ type: 'error', text: `Could not open the conversation: ${e.message}` });
     }
     this.post({ type: 'idle' });
+  }
+
+  // Only conversation files of this folder, as listed by pickSession(): the path comes from the webview.
+  sessionFileOk(file) {
+    return typeof file === 'string' && file.endsWith('.jsonl') && !!this.sessionDir
+      && path.dirname(path.resolve(file)) === path.resolve(this.sessionDir) && fs.existsSync(file);
+  }
+  isCurrentSession(file) { return !!this.sessionFile && path.resolve(file) === path.resolve(this.sessionFile); }
+
+  async renameSession(file) {
+    if (!this.sessionFileOk(file)) return;
+    const old = sessionSummary(file)?.title || '';
+    const title = (await vscode.window.showInputBox({ title: this.t('Rename conversation'), value: old, prompt: this.t('New name for this conversation') }))
+      ?.replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (!title || title === old) return this.pickSession();
+    try {
+      if (this.isCurrentSession(file) && this.client) await this.client.request({ type: 'set_session_name', name: title });
+      const fd = fs.openSync(file, 'r+');
+      try {
+        const buf = Buffer.alloc(4096);
+        const head = buf.toString('utf8', 0, fs.readSync(fd, buf, 0, buf.length, 0));
+        const nl = head.indexOf('\n');
+        const line = titleHeader(nl < 0 ? head : head.slice(0, nl), title);
+        if (!line) throw new Error('this conversation file has no title line, or the name is too long');
+        fs.writeSync(fd, line, 0, 'utf8');
+      } finally { fs.closeSync(fd); }
+    } catch (e) {
+      this.post({ type: 'error', text: `Could not rename the conversation: ${e.message}` });
+    }
+    return this.pickSession();
+  }
+
+  async deleteSession(file) {
+    if (!this.sessionFileOk(file)) return;
+    const title = sessionSummary(file)?.title || path.basename(file);
+    const yes = this.t('Delete');
+    const pick = await vscode.window.showWarningMessage(this.t('Delete this conversation?'), { modal: true, detail: `${title}\n\n${this.t('The file goes to the trash.')}` }, yes);
+    if (pick !== yes) return this.pickSession();
+    const current = this.isCurrentSession(file);
+    try {
+      await vscode.workspace.fs.delete(vscode.Uri.file(file), { useTrash: true });
+    } catch (e) {
+      return this.post({ type: 'error', text: `Could not delete the conversation: ${e.message}` });
+    }
+    if (current) return this.newSession(); // nothing left to continue
+    return this.pickSession();
+  }
+
+  // ---- files named in replies, and code blocks sent to the editor ----
+  resolveFile(file) {
+    if (!file || (!path.isAbsolute(file) && !this.cwd)) return null;
+    const abs = path.resolve(this.cwd || '', file);
+    try { return fs.statSync(abs).isFile() ? abs : null; } catch { return null; }
+  }
+
+  async openFile(ref) {
+    const { file, line, col } = parseFileRef(String(ref || ''));
+    const abs = this.resolveFile(file);
+    if (!abs) return this.post({ type: 'notice', text: `Could not find ${file} in the workspace.` });
+    const pos = new vscode.Position(Math.max(0, line - 1), Math.max(0, col - 1));
+    await vscode.window.showTextDocument(vscode.Uri.file(abs), { preview: true, selection: new vscode.Range(pos, pos) });
+  }
+
+  // The editor you were last in (the panel has focus, so activeTextEditor may be gone).
+  lastEditor() { return vscode.window.activeTextEditor || vscode.window.visibleTextEditors?.[0]; }
+
+  async insertCode(code) {
+    const ed = this.lastEditor();
+    if (!ed) return this.newFileFromCode(code, '');
+    await vscode.window.showTextDocument(ed.document, { viewColumn: ed.viewColumn, preview: false });
+    await ed.edit((b) => ed.selections.forEach((s) => b.replace(s, code)));
+  }
+
+  async newFileFromCode(code, lang) {
+    lang = lang.toLowerCase();
+    let doc;
+    try { doc = await vscode.workspace.openTextDocument({ content: code, language: LANG_IDS[lang] || lang || 'plaintext' }); }
+    catch { doc = await vscode.workspace.openTextDocument({ content: code }); } // unknown language id
+    await vscode.window.showTextDocument(doc, { preview: false });
   }
 
   setModel(m) {
@@ -1318,6 +1525,13 @@ class ChatProvider {
   async refreshMeter() {
     if (!this.client || !this.view) return;
     const [state, account] = await Promise.all([this.client.request({ type: 'get_state' }).catch(() => null), this.account()]);
+    // Claude Code's "context left until auto-compact": warn once as the window fills, again after it has been freed.
+    const pct = state?.contextUsage?.percent;
+    if (pct >= 80 && !this.ctxWarned) {
+      this.ctxWarned = true;
+      this.post({ type: 'notice', text: `The context is ${Math.round(pct)}% full. Compact the conversation to keep going: omp keeps a summary and frees the space.`,
+        actions: [{ label: 'Compact now', cmd: 'compact' }] });
+    } else if (pct < 50) this.ctxWarned = false;
     this.post({ type: 'meter', context: state?.contextUsage || null, free: /:free$/.test(this.modelName || ''),
       today: this.today(), freeQuota: account?.free_model_daily_requests || null, windows: account?.windows || null });
   }
@@ -1561,6 +1775,15 @@ class ChatProvider {
     const cfg = vscode.workspace.getConfiguration('ompChat');
     this.post({ type: 'mode', mode: cfg.get('approvalMode') });
     if (RESTART_KEYS.some((k) => e.affectsConfiguration('ompChat.' + k))) return this.restart();
+    if (e.affectsConfiguration('ompChat.thinkingLevel')) {
+      const level = thinkingLevel(cfg);
+      this.post({ type: 'thinking_level', level });
+      if (!this.client) return; // the next start passes --thinking
+      // Changed inside the running omp, so the conversation carries on.
+      try { await this.client.request({ type: 'set_thinking_level', level }); }
+      catch (err) { this.post({ type: 'error', text: `Could not set the thinking level to ${level}: ${err.message}` }); }
+      return;
+    }
     if (e.affectsConfiguration('ompChat.model') && this.quietModel === cfg.get('model')) { this.quietModel = null; return; } // addKeyForm restarts
     if (e.affectsConfiguration('ompChat.model') && this.client) {
       const id = String(cfg.get('model'));
@@ -1671,6 +1894,7 @@ class ChatProvider {
     const client = await this.ensureClient();
     if (!client) { this.post({ type: 'idle' }); return; }
     if (/^!\s*\S/.test(text)) return this.runShell(text.replace(/^!\s*/, ''));
+    if (/^#(?!#)\s*\S/.test(text) && !text.includes('\n')) return this.remember(text.replace(/^#\s*/, '')); // one line only
     const isCommand = text.startsWith('/'); // slash commands must reach omp verbatim
     const ctx = withContext && !isCommand ? this.contextInfo() : null;
     const pinned = isCommand ? [] : this.pinned.filter((rel) => rel !== ctx?.rel);
@@ -1824,31 +2048,25 @@ class ChatProvider {
   <div id="todos" hidden></div>
   <div id="queue" hidden></div>
   <div id="box">
-    <div id="ctx" hidden>
-      <div id="ctxChip" class="chip" title="Sent with your next message.">
-        <span id="ctxIcon" class="codicon codicon-file"></span><span id="ctxLabel"></span><button id="ctxPin" class="ctxx" title="Keep this file attached to every message"><span class="codicon codicon-pin"></span></button><button id="ctxEye" class="ctxx" title="Remove: don't send this file"><span class="codicon codicon-close"></span></button>
-      </div>
-      <span id="pinned"></span>
-    </div>
+    <div id="ctx" hidden><span id="pinned"></span></div>
     <div id="thumbs" hidden></div>
     <div id="shellHint" hidden><span class="codicon codicon-terminal"></span>Shell command: runs in the workspace, and the output joins the conversation</div>
+    <div id="memHint" hidden><span class="codicon codicon-bookmark"></span>Memory: saved to the project's AGENTS.md, so the agent remembers it in every chat</div>
     <textarea id="input" rows="1" placeholder="Ask OMP, / for commands, ! to run a shell command"></textarea>
+    <!-- Laid out like Claude Code's prompt box: mode and the open file on the left; context, model · effort,
+         commands, mentions and send on the right. -->
     <div id="tools">
+      <button id="mode" class="pill" title="When OMP must ask before running tools (Shift+Tab)" aria-haspopup="listbox"><span id="modeIcon" class="codicon codicon-shield"></span><span id="modeLabel" class="plabel"></span></button>
+      <span id="ctxChip" hidden><button id="ctxEye" class="pill"><span id="ctxIcon" class="codicon codicon-eye"></span><span id="ctxLabel" class="plabel"></span></button><button id="ctxPin" class="icon" title="Keep this file attached to every message"><span class="codicon codicon-pin"></span></button></span>
+      <span class="spacer"></span>
+      <button id="meter" class="pill" title="Usage &amp; limits" hidden><span id="ring" class="ring"></span><span id="meterText"></span></button>
+      <button id="model" class="pill" title="Model and effort" aria-haspopup="listbox"><span id="modelName"></span><span id="effort"></span></button>
+      <button id="slash" class="icon" title="Commands (/)"><span class="glyph">/</span></button>
       <button id="attach" class="icon" title="Mention a file (@)"><span class="codicon codicon-mention"></span></button>
       <button id="addImage" class="icon" title="Attach images (or paste / drop them)"><span class="codicon codicon-file-media"></span></button>
       <input id="imageFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
-      <select id="mode" title="When OMP must ask before running tools">
-        <option value="always-ask">Ask before edits</option>
-        <option value="always-ask-cached">Ask &amp; remember</option>
-        <option value="write">Auto-approve edits</option>
-        <option value="yolo">Full auto</option>
-        <option value="plan">Plan (read-only)</option>
-      </select>
-      <span class="spacer"></span>
-      <button id="meter" class="pill" title="Usage &amp; limits" hidden><span class="codicon codicon-dashboard"></span><span id="meterText"></span></button>
-      <button id="model" class="pill" title="Change model"><span id="modelName"></span><span class="codicon codicon-chevron-down"></span></button>
-      <button id="stop" class="icon send" hidden title="Stop (the agent keeps what it did so far)"><span class="codicon codicon-debug-stop"></span></button>
-      <button id="send" class="icon send" title="Send (Enter)"><span class="codicon codicon-send"></span></button>
+      <button id="stop" class="icon send" hidden title="Stop (the agent keeps what it did so far)"><span class="codicon codicon-primitive-square"></span></button>
+      <button id="send" class="icon send" title="Send (Enter)"><span class="codicon codicon-arrow-up"></span></button>
     </div>
   </div>
 </div>
@@ -1860,33 +2078,138 @@ class ChatProvider {
   }
 }
 
+// ---- chats in editor tabs, each with its own omp (herdr's panes), optionally in their own git worktree ----
+let tabSeq = 1;
+
+// A WebviewPanel dressed as the WebviewView the chat was written for.
+function panelView(panel, title) {
+  return {
+    webview: panel.webview,
+    get visible() { return panel.visible; },
+    show: () => panel.reveal(),
+    set description(v) { panel.title = v ? `${title} · ${v}` : title; },
+    set badge(_) { /* tabs show their state in the title */ },
+    onDidDispose: (cb) => panel.onDidDispose(cb),
+    onDidChangeVisibility: (cb) => panel.onDidChangeViewState(cb),
+  };
+}
+
+// panel: given when VS Code restores a tab after a reload; resume: that tab's conversation.
+function openTab(context, { panel, resume, worktree } = {}) {
+  if (worktree && !fs.existsSync(worktree.cwd)) worktree = null; // removed since: work in the main folder
+  const title = worktree ? `OMP Chat · ${worktree.branch}` : `OMP Chat ${++tabSeq}`;
+  panel ??= vscode.window.createWebviewPanel(TAB_TYPE, title, vscode.ViewColumn.Beside, { enableScripts: true, retainContextWhenHidden: true });
+  panel.title = title;
+  panel.iconPath = vscode.Uri.joinPath(context.extensionUri, 'media', 'icon.svg');
+  const chat = new ChatProvider(context, { tab: true, title, worktree });
+  chat.panel = panel;
+  if (resume && sessionSummary(resume)) chat.resume = { file: resume, replay: true };
+  chats.add(chat);
+  panel.onDidDispose(() => {
+    chats.delete(chat);
+    const c = chat.client;
+    chat.client = null; // closed on purpose: no "omp stopped" error
+    c?.dispose();
+    refreshStatusBar();
+    if (chat.worktree) closeWorktree(chat.worktree);
+  });
+  chat.resolveWebviewView(panelView(panel, title));
+  return chat;
+}
+
+// A new branch checked out next to the repository (<repo>.worktrees/<branch>), so this chat's edits never touch yours.
+async function newWorktreeChat(context) {
+  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  let top;
+  try { top = root && await git(['rev-parse', '--show-toplevel'], root); } catch {}
+  if (!top) return vscode.window.showErrorMessage('OMP Chat: a worktree chat needs a folder that is a git repository.');
+  const stamp = new Date().toISOString().slice(0, 16).replace(/\D/g, '');
+  const branch = await vscode.window.showInputBox({ title: 'New chat in a git worktree', prompt: 'Branch for this chat (created from the current commit)',
+    value: `omp/chat-${stamp}`, validateInput: (v) => (/^[\w][\w./-]*$/.test(v) && !/\.\.|\/$|\.lock$/.test(v) ? null : 'Letters, digits and / . _ - only') });
+  if (!branch) return;
+  const dir = path.join(path.dirname(top), `${path.basename(top)}.worktrees`, branch.replace(/\//g, '-'));
+  try {
+    const base = await git(['rev-parse', 'HEAD'], top);
+    await git(['worktree', 'add', '-b', branch, dir, base], top);
+    // the same subfolder of the repository that is open in VS Code
+    openTab(context, { worktree: { top, branch, base, path: dir, cwd: path.join(dir, path.relative(top, root)) } });
+  } catch (e) {
+    vscode.window.showErrorMessage(`OMP Chat: could not create the worktree: ${e.message}`);
+  }
+}
+
+// Closing the tab: a worktree with nothing in it (no changes, no new commits) is removed with its branch; one with
+// work in it is kept for you to review and merge.
+async function closeWorktree(wt) {
+  try {
+    const dirty = await git(['status', '--porcelain'], wt.path);
+    const ahead = await git(['rev-list', '--count', `${wt.base}..${wt.branch}`], wt.top);
+    if (!dirty && ahead === '0') {
+      for (let i = 0; ; i++) { // omp may still hold the folder for a moment after it is stopped (Windows)
+        try { await git(['worktree', 'remove', wt.path], wt.top); break; }
+        catch (e) { if (i >= 3) throw e; await new Promise((r) => setTimeout(r, 1000)); }
+      }
+      await git(['branch', '-D', wt.branch], wt.top);
+      return;
+    }
+  } catch { /* fall through: keep it */ }
+  const open = 'Open in New Window';
+  const pick = await vscode.window.showInformationMessage(`OMP Chat: the worktree for branch ${wt.branch} has changes, so it was kept at ${wt.path}. `
+    + `Merge the branch when you are happy with it, then remove it with "git worktree remove".`, open);
+  if (pick === open) vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(wt.path), true);
+}
+
 function activate(context) {
   const provider = new ChatProvider(context);
-  // Agent status in the status bar, visible even with the panel closed; click opens the chat.
-  provider.statusItem = vscode.window.createStatusBarItem?.(vscode.StatusBarAlignment?.Left, 100);
-  if (provider.statusItem) {
-    provider.statusItem.name = 'OMP Chat status';
-    provider.statusItem.command = 'ompChat.focus';
-    context.subscriptions.push(provider.statusItem);
+  chats.add(provider);
+  // The chat a palette command means: the tab you are in, otherwise the sidebar's.
+  const current = () => [...chats].find((c) => c.panel?.active) || provider;
+  // Agent status in the status bar, visible even with the panel closed; click opens the chat that needs you.
+  statusItem = vscode.window.createStatusBarItem?.(vscode.StatusBarAlignment?.Left, 100);
+  if (statusItem) {
+    statusItem.name = 'OMP Chat status';
+    statusItem.command = 'ompChat.attention';
+    context.subscriptions.push(statusItem);
   }
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider('ompChat.view', provider, {
       webviewOptions: { retainContextWhenHidden: true },
     }),
+    // Tabs come back after a reload with their conversation (and worktree), kept in the tab's webview state.
+    vscode.window.registerWebviewPanelSerializer?.(TAB_TYPE, {
+      async deserializeWebviewPanel(panel, state) {
+        openTab(context, { panel, resume: state?.session?.file, worktree: state?.session?.worktree });
+      },
+    }) || { dispose() {} },
     vscode.workspace.registerTextDocumentContentProvider(ORIG_SCHEME, provider),
     vscode.commands.registerCommand('ompChat.focus', () =>
       vscode.commands.executeCommand('ompChat.view.focus')),
-    vscode.commands.registerCommand('ompChat.newSession', () => provider.newSession()),
-    vscode.commands.registerCommand('ompChat.stop', () => provider.stop()),
-    vscode.commands.registerCommand('ompChat.pickModel', () => provider.pickModel()),
-    vscode.commands.registerCommand('ompChat.history', () => provider.pickSession()),
-    vscode.commands.registerCommand('ompChat.usage', () => provider.showUsage()),
-    vscode.commands.registerCommand('ompChat.plugins', () => provider.showPlugins()),
-    vscode.commands.registerCommand('ompChat.manageModels', () => provider.showModelsSheet()),
-    vscode.commands.registerCommand('ompChat.setApiKey', () => provider.manageKeys()),
-    vscode.commands.registerCommand('ompChat.exportChat', () => provider.exportChat()),
-    vscode.commands.registerCommand('ompChat.commands', () => provider.showCommands()),
-    vscode.commands.registerCommand('ompChat.mcp', () => provider.showMcp()),
+    vscode.commands.registerCommand('ompChat.newTab', () => openTab(context)),
+    vscode.commands.registerCommand('ompChat.newWorktreeChat', () => newWorktreeChat(context)),
+    vscode.commands.registerCommand('ompChat.attention', () => { // the one waiting for you first, then one that finished
+      const top = byStatus()[0];
+      return (top && top.s !== 'idle' ? top.c : current()).reveal();
+    }),
+    vscode.commands.registerCommand('ompChat.chats', async () => {
+      const items = [...chats].map((c) => {
+        const s = c.agentStatus();
+        return { label: `${STATUS_ICON[s]} ${c === provider ? provider.t('OMP Chat (sidebar)') : c.title}`,
+          description: [c.t(STATUS_UI[s].title.replace(/^\S+ /, '')), c.modelName].filter(Boolean).join(' · '), detail: c.worktree?.path, c };
+      });
+      const pick = await vscode.window.showQuickPick(items, { title: provider.t('OMP Chat: all chats') });
+      pick?.c.reveal();
+    }),
+    vscode.commands.registerCommand('ompChat.newSession', () => current().newSession()),
+    vscode.commands.registerCommand('ompChat.stop', () => current().stop()),
+    vscode.commands.registerCommand('ompChat.pickModel', () => current().pickModel()),
+    vscode.commands.registerCommand('ompChat.history', () => current().pickSession()),
+    vscode.commands.registerCommand('ompChat.usage', () => current().showUsage()),
+    vscode.commands.registerCommand('ompChat.plugins', () => current().showPlugins()),
+    vscode.commands.registerCommand('ompChat.manageModels', () => current().showModelsSheet()),
+    vscode.commands.registerCommand('ompChat.setApiKey', () => current().manageKeys()),
+    vscode.commands.registerCommand('ompChat.exportChat', () => current().exportChat()),
+    vscode.commands.registerCommand('ompChat.commands', () => current().showCommands()),
+    vscode.commands.registerCommand('ompChat.mcp', () => current().showMcp()),
     vscode.commands.registerCommand('ompChat.addFile', (uri, all) => (Array.isArray(all) && all.length ? all : [uri || vscode.window.activeTextEditor?.document.uri]).forEach((u) => provider.pinFile(u)) || provider.reveal()),
     vscode.commands.registerCommand('ompChat.ask', () => provider.editorAction('ask')),
     vscode.commands.registerCommand('ompChat.explain', () => provider.editorAction('explain')),
@@ -1900,13 +2223,13 @@ function activate(context) {
         return [a];
       },
     }, { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }),
-    vscode.workspace.onDidChangeConfiguration((e) => provider.onConfigChange(e)),
-    vscode.window.onDidChangeActiveTextEditor(() => provider.postContext()),
-    vscode.window.onDidChangeTextEditorSelection(() => provider.postContext()),
-    { dispose: () => provider.dispose() },
+    vscode.workspace.onDidChangeConfiguration((e) => chats.forEach((c) => c.onConfigChange(e))),
+    vscode.window.onDidChangeActiveTextEditor(() => chats.forEach((c) => c.postContext())),
+    vscode.window.onDidChangeTextEditorSelection(() => chats.forEach((c) => c.postContext())),
+    { dispose: () => chats.forEach((c) => c.dispose()) },
   );
 }
 
 function deactivate() {}
 
-module.exports = { activate, deactivate, _test: { toMarkdown, splitUserText, problemLines, listCommandFiles, commandFileText, parseMcpList } };
+module.exports = { activate, deactivate, _test: { chats, openTab, closeWorktree, newWorktreeChat, parseFileRef, titleHeader, toMarkdown, splitUserText, problemLines, listCommandFiles, commandFileText, parseMcpList } };
