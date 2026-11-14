@@ -41,7 +41,14 @@ function findOmp() {
 // Left side of the diff view: the file as it was before an omp edit (omp-orig:/<name>?<editId>).
 const ORIG_SCHEME = 'omp-orig';
 // Settings that only take effect when omp is respawned (the model switches live via set_model).
-const RESTART_KEYS = ['approvalMode', 'ompPath', 'extraArgs'];
+const RESTART_KEYS = ['approvalMode', 'ompPath', 'extraArgs', 'announceSteps'];
+
+// Appended to omp's system prompt (ompChat.announceSteps): say what you are about to do, as Claude Code does.
+const ANNOUNCE_STEPS = `# Keeping the user informed
+- Before your first tool call, say in one short sentence what you are about to do and why, e.g. "I'll read the config loader to see where the port is set."
+- While working, write one short line when you learn something that changes the plan, find the cause, or move to a new phase of the work. Do not narrate every tool call or repeat yourself.
+- When you finish, give a brief summary: what you changed or found, and anything left for the user to do.
+- Write these updates in the language the user writes in.`;
 
 const LAST_SESSION = 'ompChat.lastSession'; // workspaceState key: session file to resume on reload
 // Webview messages that can change the agent status shown outside the chat.
@@ -612,6 +619,7 @@ class ChatProvider {
     const mode = cfg.get('approvalMode') === 'plan' ? 'always-ask' : cfg.get('approvalMode');
     const think = cfg.get('thinkingLevel');
     const args = ['--mode', 'rpc', '--model', cfg.get('model'), ...(mode ? ['--approval-mode', mode] : []), ...(think ? [`--thinking=${think}`] : []),
+      ...(cfg.get('announceSteps', true) ? [`--append-system-prompt=${ANNOUNCE_STEPS}`] : []), // a later one in extraArgs wins
       ...this.overlayArgs(), ...cfg.get('extraArgs', [])];
     const ompPath = cfg.get('ompPath') || 'omp';
     const fallback = ompPath === 'omp' ? this.ompFallback : null;

@@ -276,6 +276,7 @@ Type `/` to see everything available on your machine.
 |---|---|---|
 | `ompChat.model` | `openrouter/baidu/ernie-5.5-flash-preview:free` | Model as `provider/model`; the model picker writes this |
 | `ompChat.thinkingLevel` | *(empty)* | How much the model thinks: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; empty is omp's default. Also the **Thinking** list in the toolbar; it applies to the running conversation |
+| `ompChat.announceSteps` | `true` | The agent says what it is about to do before it uses tools, gives short updates while it works and sums up at the end, as in Claude Code (added to omp's system prompt; a `--append-system-prompt` in `extraArgs` replaces it) |
 | `ompChat.approvalMode` | `always-ask` | `always-ask`, `always-ask-cached`, `write`, `yolo` or `plan` (the toolbar modes above) |
 | `ompChat.ompPath` | `omp` | Path to the omp executable |
 | `ompChat.extraArgs` | `[]` | Extra omp command-line arguments |

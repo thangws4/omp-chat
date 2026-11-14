@@ -248,6 +248,11 @@
           "default": "",
           "description": "%config.thinkingLevel%"
         },
+        "ompChat.announceSteps": {
+          "type": "boolean",
+          "default": true,
+          "description": "%config.announceSteps%"
+        },
         "ompChat.extraArgs": {
           "type": "array",
           "items": {
