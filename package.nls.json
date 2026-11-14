@@ -27,5 +27,10 @@
   "config.approvalMode.plan": "Plan mode: read-only; the agent writes a plan, and you approve it before anything changes.",
   "config.thinkingLevel": "How much the model thinks before answering: off, minimal, low, medium, high, xhigh or max. Empty uses omp's default. Models without reasoning ignore it. Changes apply to the running conversation.",
   "config.announceSteps": "Ask the agent to say what it is about to do before it uses tools, give short updates while it works, and sum up at the end (like Claude Code). Changing it restarts omp and resumes the conversation.",
-  "config.extraArgs": "Extra CLI arguments appended after --mode rpc."
+  "config.extraArgs": "Extra CLI arguments appended after --mode rpc.",
+  "command.newTab": "Open Chat in New Tab",
+  "command.newWorktreeChat": "New Chat in Git Worktree…",
+  "command.chats": "Show All Chats",
+  "command.attention": "Go to the Chat That Needs You",
+  "config.notifications": "Show a notification when a chat needs your answer while it is hidden or VS Code is in the background, and when it finishes while VS Code is in the background."
 }

@@ -1468,10 +1468,14 @@
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   });
   // A leading "!" switches the box to shell mode, like Claude Code's bash mode.
+  // ... and a leading "#" (one line) saves a note to the project's memory, like Claude Code's # shortcut.
   function updateShellMode() {
     const on = /^!/.test(input.value);
+    const mem = /^#(?!#)/.test(input.value) && !input.value.includes('\n');
     $('box').classList.toggle('shellmode', on);
+    $('box').classList.toggle('memmode', mem);
     $('shellHint').hidden = !on;
+    $('memHint').hidden = !mem;
   }
   input.addEventListener('input', () => { autosize(); updateShellMode(); if (pk) pk.active = 0; updateInlinePicker(); saveState({ draft: input.value }); });
   // What you were typing comes back after a reload.
@@ -1668,6 +1672,7 @@
       case 'mode': modeSel.value = m.mode; break;
       case 'thinking_level': $('think').value = m.level || ''; break;
       case 'paths': markPaths(m); break;
+      case 'session': saveState({ session: { file: m.file, worktree: m.worktree || null } }); break; // a tab reopens it after a reload
       case 'meter': showMeter(m); break;
       case 'usage': showUsage(m); break;
       case 'commands': commands = m.list || []; break;

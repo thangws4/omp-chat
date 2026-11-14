@@ -101,6 +101,7 @@ When the agent keeps a to-do list, it is pinned above the box (**Todos 2/5**): �
 | Images | Paste with **Ctrl+V**, drop onto the box, or use the 🖼 button. Up to 5 per message; large images are scaled down. The model must support images |
 | `/` | Lists omp's slash commands, for example `/session`, `/compact`, `/retry`, `/mcp` |
 | `!` | Runs the rest as a shell command in the workspace (the box switches to shell mode). See [Terminal](#terminal) |
+| `#` | Saves the rest of the line to the project's memory (`AGENTS.md`) instead of sending it. See [Memory](#memory) |
 | ↑ / ↓ in an empty box | Brings back the messages you sent before, like a shell. What you are typing is kept if the window reloads |
 
 The suggestions on the start screen (**Explain this file**, **Find and fix bugs**, **Write tests**) send a ready-made request about the open file.
@@ -125,7 +126,7 @@ You can see what the agent is doing even with the panel closed:
 | Finished while the panel was hidden | 🔵 done | badge ① | OMP: done |
 | Idle | | | hidden |
 
-Click the status bar item to open the chat. Opening the panel clears "done".
+Click the status bar item to open the chat (with several chats, the one that needs you). Opening the panel clears "done".
 
 ### Approvals
 
@@ -189,12 +190,33 @@ The longer conversation is kept as an earlier chat (🕘). In a reopened convers
 
 ### Conversations
 
-- Reloading the window reopens the last conversation of the workspace.
+- Reloading the window reopens the last conversation of the workspace. If the agent was in the middle of a turn when the window closed, the chat says so and offers **Continue**.
 - **+** (title bar) starts a new chat.
 - **🕘** (title bar) lists earlier conversations of this workspace; type to filter, **Enter** to open. Their diffs and **Undo** buttons work again. ✏ (**F2**) renames a conversation, 🗑 (**Del**) moves it to the trash.
 - **…** → **Export Chat as Markdown** opens the conversation as a Markdown document (your messages, replies, tool calls and shell commands) to save or share.
 
 Conversations are stored by omp in `~/.omp/agent/sessions/`.
+
+When the context window is 80% full, the chat suggests **Compact now** (`/compact`): omp replaces the older part of the conversation with a summary and frees the space.
+
+### Several chats at once
+
+Like running several agents side by side in herdr, you can have more than one chat working at the same time. Each has its own omp and conversation.
+
+- **…** → **Open Chat in New Tab**: a chat in an editor tab, next to your code. Its title shows its state (🟡 working, 🔴 waiting for you, 🔵 done); its tab bar has New chat, Chats and Usage.
+- **…** → **New Chat in Git Worktree…**: the same, but the chat works on its own branch, checked out in a separate folder next to the project (`<project>.worktrees/<branch>`), so its edits never touch your files or another chat's. When you close the tab, a worktree with no changes is removed with its branch; one with changes is kept so you can review and merge the branch.
+- **…** → **Show All Chats** lists every chat with its state and model; pick one to go to it.
+- The status bar sums them up (*OMP: needs you · 2 chats*); clicking it goes to the chat that needs you.
+- Tabs come back after a reload with their conversation.
+- Settings (model, approval mode, keys) are shared by all chats.
+
+### Notifications
+
+When a chat asks for your answer while it is hidden or VS Code is in the background, or finishes while VS Code is in the background, a VS Code notification says so, with **Open**. Turn it off with `ompChat.notifications`.
+
+### Memory
+
+Start a one-line message with `#` to save a note for the agent instead of sending it, as in Claude Code: `# use pnpm, not npm`. It is added to the project's `AGENTS.md` (or `CLAUDE.md`, if that is the one the project has), which omp reads at the start of every conversation. The current conversation is told right away.
 
 ## 5. API keys and limits
 
@@ -276,6 +298,7 @@ Type `/` to see everything available on your machine.
 |---|---|---|
 | `ompChat.model` | `openrouter/baidu/ernie-5.5-flash-preview:free` | Model as `provider/model`; the model picker writes this |
 | `ompChat.thinkingLevel` | *(empty)* | How much the model thinks: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; empty is omp's default. Also the **Thinking** list in the toolbar; it applies to the running conversation |
+| `ompChat.notifications` | `true` | Notify when a chat needs you or finishes while you are elsewhere |
 | `ompChat.announceSteps` | `true` | The agent says what it is about to do before it uses tools, gives short updates while it works and sums up at the end, as in Claude Code (added to omp's system prompt; a `--append-system-prompt` in `extraArgs` replaces it) |
 | `ompChat.approvalMode` | `always-ask` | `always-ask`, `always-ask-cached`, `write`, `yolo` or `plan` (the toolbar modes above) |
 | `ompChat.ompPath` | `omp` | Path to the omp executable |
@@ -299,6 +322,10 @@ Type `/` to see everything available on your machine.
 | OMP Chat: Add File to OMP Chat | Right-click a file in the Explorer or an editor tab |
 | OMP Chat: Ask / Explain / Fix with OMP Chat | Right-click in the editor; Fix also in the light bulb |
 | OMP Chat: Stop Agent | **■** / **Esc** |
+| OMP Chat: Open Chat in New Tab | **…** menu |
+| OMP Chat: New Chat in Git Worktree… | **…** menu |
+| OMP Chat: Show All Chats | **…** menu, or the tab's title bar |
+| OMP Chat: Go to the Chat That Needs You | Status bar item |
 
 | Key | Anywhere |
 |---|---|

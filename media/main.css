@@ -149,8 +149,9 @@ details > summary::-webkit-details-marker { display: none; }
 }
 #box.shellmode { border-color: var(--vscode-terminal-ansiYellow, var(--vscode-focusBorder)); }
 #box.shellmode textarea { font-family: var(--vscode-editor-font-family); }
-#shellHint { display: flex; align-items: center; gap: 4px; padding: 6px 10px 0; font-size: .85em; color: var(--vscode-descriptionForeground); }
-#shellHint[hidden] { display: none; }
+#box.memmode { border-color: var(--vscode-terminal-ansiBlue, var(--vscode-focusBorder)); }
+#shellHint, #memHint { display: flex; align-items: center; gap: 4px; padding: 6px 10px 0; font-size: .85em; color: var(--vscode-descriptionForeground); }
+#shellHint[hidden], #memHint[hidden] { display: none; }
 
 /* subagent cards, under the task row that spawned them */
 .subagent {
