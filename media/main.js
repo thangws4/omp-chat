@@ -602,8 +602,10 @@
     sheet.onkeydown = null;
     sheet.className = '';
   }
+  // One overlay at a time: a sheet replaces any open list (history, models…), and those lists close the sheet.
   function openSheet(title, iconName, onRefresh) {
     closeSheet();
+    hidePicker();
     const head = el('div', 'uhead');
     head.append(icon(iconName), el('span', 'utitle', title), el('span', 'spacer'));
     if (onRefresh) {
@@ -1174,6 +1176,8 @@
     return (it.desc || '').toLowerCase().includes(q) ? 2 : -1;
   }
   function openPicker(kind, all, choose, query) {
+    // Lists you open from a button replace an open sheet; the @ and / lists while you type leave it alone.
+    if (kind === 'history' || kind === 'model' || kind === 'mode') closeSheet();
     pk = { kind, all, choose, active: 0 };
     filterPicker(query || '');
   }
