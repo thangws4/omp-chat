@@ -101,8 +101,11 @@ When the agent keeps a to-do list, it is pinned above the box (**Todos 2/5**): �
 | Images | Paste with **Ctrl+V**, drop onto the box, or use the 🖼 button. Up to 5 per message; large images are scaled down. The model must support images |
 | `/` | Lists omp's slash commands, for example `/session`, `/compact`, `/retry`, `/mcp` |
 | `!` | Runs the rest as a shell command in the workspace (the box switches to shell mode). See [Terminal](#terminal) |
+| ↑ / ↓ in an empty box | Brings back the messages you sent before, like a shell. What you are typing is kept if the window reloads |
 
 The suggestions on the start screen (**Explain this file**, **Find and fix bugs**, **Write tests**) send a ready-made request about the open file.
+
+In replies, a file path such as `src/app.ts:42` is a link: click it to open the file at that line. Code blocks have **Insert at cursor** (into the editor you were last in), **Open in new file** and **Copy**.
 
 Under each finished reply: 📋 copies the whole answer as Markdown, followed by what the turn used, for example `13k in · 312 out · $0.0021 · 14s` (tokens sent and received, cost as priced by omp, time).
 
@@ -188,7 +191,7 @@ The longer conversation is kept as an earlier chat (🕘). In a reopened convers
 
 - Reloading the window reopens the last conversation of the workspace.
 - **+** (title bar) starts a new chat.
-- **🕘** (title bar) lists earlier conversations of this workspace; type to filter, **Enter** to open. Their diffs and **Undo** buttons work again.
+- **🕘** (title bar) lists earlier conversations of this workspace; type to filter, **Enter** to open. Their diffs and **Undo** buttons work again. ✏ (**F2**) renames a conversation, 🗑 (**Del**) moves it to the trash.
 - **…** → **Export Chat as Markdown** opens the conversation as a Markdown document (your messages, replies, tool calls and shell commands) to save or share.
 
 Conversations are stored by omp in `~/.omp/agent/sessions/`.
@@ -272,6 +275,7 @@ Type `/` to see everything available on your machine.
 | Setting | Default | |
 |---|---|---|
 | `ompChat.model` | `openrouter/baidu/ernie-5.5-flash-preview:free` | Model as `provider/model`; the model picker writes this |
+| `ompChat.thinkingLevel` | *(empty)* | How much the model thinks: `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; empty is omp's default. Also the **Thinking** list in the toolbar; it applies to the running conversation |
 | `ompChat.approvalMode` | `always-ask` | `always-ask`, `always-ask-cached`, `write`, `yolo` or `plan` (the toolbar modes above) |
 | `ompChat.ompPath` | `omp` | Path to the omp executable |
 | `ompChat.extraArgs` | `[]` | Extra omp command-line arguments |
@@ -295,10 +299,18 @@ Type `/` to see everything available on your machine.
 | OMP Chat: Ask / Explain / Fix with OMP Chat | Right-click in the editor; Fix also in the light bulb |
 | OMP Chat: Stop Agent | **■** / **Esc** |
 
+| Key | Anywhere |
+|---|---|
+| Ctrl+Alt+O (⌘⌥O) | Open the chat |
+| Ctrl+Alt+A (⌘⌥A) | In the editor: ask OMP Chat about the file or selection |
+
+Change them in **Keyboard Shortcuts** (search `OMP Chat`).
+
 | Key | In the message box |
 |---|---|
 | Enter / Shift+Enter | Send / new line |
 | `!` at the start | Shell mode: run the message as a command |
+| ↑ / ↓ | Earlier messages you sent (in an empty box) |
 | Shift+Tab | Next approval mode |
 | Esc | Stop the agent (or close an open list) |
 | ↑ ↓, Enter, Tab | Move and pick in `/`, `@`, model and chat lists |

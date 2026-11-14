@@ -2,7 +2,7 @@
   "name": "omp-chat",
   "displayName": "OMP Chat by DT",
   "description": "AI coding chat panel for VS Code, powered by the oh-my-pi (omp) agent and OpenRouter / DeepSeek models.",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "publisher": "dtcode-dev",
   "icon": "media/logo.png",
   "engines": {
@@ -233,6 +233,21 @@
           "default": "always-ask",
           "description": "%config.approvalMode%"
         },
+        "ompChat.thinkingLevel": {
+          "type": "string",
+          "enum": [
+            "",
+            "off",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "default": "",
+          "description": "%config.thinkingLevel%"
+        },
         "ompChat.extraArgs": {
           "type": "array",
           "items": {
@@ -242,7 +257,20 @@
           "description": "%config.extraArgs%"
         }
       }
-    }
+    },
+    "keybindings": [
+      {
+        "command": "ompChat.focus",
+        "key": "ctrl+alt+o",
+        "mac": "cmd+alt+o"
+      },
+      {
+        "command": "ompChat.ask",
+        "key": "ctrl+alt+a",
+        "mac": "cmd+alt+a",
+        "when": "editorTextFocus"
+      }
+    ]
   },
   "scripts": {
     "test": "node --test \"test/*.test.js\""

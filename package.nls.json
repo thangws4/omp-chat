@@ -25,5 +25,6 @@
   "config.approvalMode.write": "Auto-accept file edits; ask before running commands.",
   "config.approvalMode.yolo": "Never ask (omp's own default).",
   "config.approvalMode.plan": "Plan mode: read-only; the agent writes a plan, and you approve it before anything changes.",
+  "config.thinkingLevel": "How much the model thinks before answering: off, minimal, low, medium, high, xhigh or max. Empty uses omp's default. Models without reasoning ignore it. Changes apply to the running conversation.",
   "config.extraArgs": "Extra CLI arguments appended after --mode rpc."
 }

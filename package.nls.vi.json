@@ -25,5 +25,6 @@
   "config.approvalMode.write": "Tự duyệt sửa file; hỏi trước khi chạy lệnh.",
   "config.approvalMode.yolo": "Không bao giờ hỏi (mặc định của omp).",
   "config.approvalMode.plan": "Chế độ lập kế hoạch: chỉ đọc; agent viết kế hoạch và bạn duyệt trước khi có thay đổi.",
+  "config.thinkingLevel": "Mức độ model suy nghĩ trước khi trả lời: off, minimal, low, medium, high, xhigh hoặc max. Để trống thì dùng mặc định của omp. Model không có khả năng suy luận sẽ bỏ qua. Thay đổi áp dụng ngay cho cuộc trò chuyện đang chạy.",
   "config.extraArgs": "Tham số dòng lệnh thêm vào sau --mode rpc."
 }

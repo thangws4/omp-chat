@@ -225,6 +225,28 @@ function sessionSummary(file) {
   return { title: (title || first).replace(/\s+/g, ' ').trim().slice(0, 90) };
 }
 
+// "src/a.ts:12:3", "src/a.ts#L12-L20" or "src/a.ts" -> { file, line, col }.
+function parseFileRef(ref) {
+  const m = /^(.*?)(?::(\d+)(?::(\d+))?|#L(\d+)(?:-L?\d+)?)?$/.exec(String(ref).trim());
+  return { file: m[1], line: +(m[2] || m[4] || 0), col: +(m[3] || 0) };
+}
+
+// omp's session files start with a space-padded title line it rewrites in place; we do the same, at the same length,
+// so the lines omp appends meanwhile are never touched. Returns null if the title does not fit.
+function titleHeader(oldLine, title) {
+  let h;
+  try { h = JSON.parse(oldLine); } catch { return null; }
+  if (h?.type !== 'title') return null;
+  const base = { ...h, title, updatedAt: new Date().toISOString(), pad: '' };
+  const fill = Buffer.byteLength(oldLine) - Buffer.byteLength(JSON.stringify(base));
+  return fill < 0 ? null : JSON.stringify({ ...base, pad: ' '.repeat(fill) });
+}
+
+// Markdown fence names -> VS Code language ids, for "New file" from a code block.
+const LANG_IDS = { js: 'javascript', jsx: 'javascriptreact', ts: 'typescript', tsx: 'typescriptreact', py: 'python', sh: 'shellscript',
+  bash: 'shellscript', zsh: 'shellscript', shell: 'shellscript', ps1: 'powershell', pwsh: 'powershell', md: 'markdown', yml: 'yaml',
+  rs: 'rust', cs: 'csharp', rb: 'ruby', kt: 'kotlin', 'c++': 'cpp', golang: 'go' };
+
 class ChatProvider {
   constructor(context) {
     this.context = context;
@@ -493,6 +515,7 @@ class ChatProvider {
   sync() {
     this.post({ type: 'mode', mode: vscode.workspace.getConfiguration('ompChat').get('approvalMode') });
     this.post({ type: 'model', name: this.modelName || vscode.workspace.getConfiguration('ompChat').get('model') });
+    this.post({ type: 'thinking_level', level: vscode.workspace.getConfiguration('ompChat').get('thinkingLevel') || '' });
     this.post({ type: 'commands', list: this.commands });
     this.postContext();
   }
@@ -510,6 +533,17 @@ class ChatProvider {
       case 'setModel': return vscode.workspace.getConfiguration('ompChat').update('model', m.id, vscode.ConfigurationTarget.Global);
       case 'history': return this.pickSession();
       case 'openSession': return this.openSession(m.file);
+      case 'renameSession': return this.renameSession(m.file);
+      case 'deleteSession': return this.deleteSession(m.file);
+      case 'openFile': return this.openFile(m.ref);
+      case 'checkPaths': { // which `path` spans in a reply are real files, so the panel can make them links
+        const refs = (Array.isArray(m.refs) ? m.refs : []).slice(0, 200).map(String);
+        return this.post({ type: 'paths', refs, ok: refs.filter((r) => this.resolveFile(parseFileRef(r).file)) });
+      }
+      case 'insertCode': return this.insertCode(String(m.code ?? ''));
+      case 'newFileFromCode': return this.newFileFromCode(String(m.code ?? ''), String(m.lang || ''));
+      case 'setThinking':
+        return vscode.workspace.getConfiguration('ompChat').update('thinkingLevel', String(m.level || ''), vscode.ConfigurationTarget.Global);
       case 'usage': return this.showUsage();
       case 'setApiKey': return this.manageKeys();
       case 'addKey': return this.addKeyForm(false, m.provider);
@@ -576,7 +610,9 @@ class ChatProvider {
 
     // Plan mode is OMP Chat's own (omp's /plan is terminal-only): omp asks for every edit/command and we deny them.
     const mode = cfg.get('approvalMode') === 'plan' ? 'always-ask' : cfg.get('approvalMode');
-    const args = ['--mode', 'rpc', '--model', cfg.get('model'), ...(mode ? ['--approval-mode', mode] : []), ...this.overlayArgs(), ...cfg.get('extraArgs', [])];
+    const think = cfg.get('thinkingLevel');
+    const args = ['--mode', 'rpc', '--model', cfg.get('model'), ...(mode ? ['--approval-mode', mode] : []), ...(think ? [`--thinking=${think}`] : []),
+      ...this.overlayArgs(), ...cfg.get('extraArgs', [])];
     const ompPath = cfg.get('ompPath') || 'omp';
     const fallback = ompPath === 'omp' ? this.ompFallback : null;
     const command = fallback ? fallback.omp : ompPath;
@@ -659,6 +695,7 @@ class ChatProvider {
       const s = await client.request({ type: 'get_state' });
       this.setModel(s.model);
       this.post({ type: 'todos', phases: s.todoPhases || [] });
+      this.sessionFile = s.sessionFile;
       if (s.sessionFile) await this.context.workspaceState.update(LAST_SESSION, s.sessionFile);
       this.refreshMeter();
       return s;
@@ -713,7 +750,7 @@ class ChatProvider {
     const client = await this.ensureClient();
     const state = await this.track(client);
     if (!state?.sessionFile) return;
-    const dir = path.dirname(state.sessionFile);
+    const dir = this.sessionDir = path.dirname(state.sessionFile);
     let files = [];
     try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => path.join(dir, f)); } catch {}
     const list = files
@@ -743,6 +780,85 @@ class ChatProvider {
       this.post({ type: 'error', text: `Could not open the conversation: ${e.message}` });
     }
     this.post({ type: 'idle' });
+  }
+
+  // Only conversation files of this folder, as listed by pickSession(): the path comes from the webview.
+  sessionFileOk(file) {
+    return typeof file === 'string' && file.endsWith('.jsonl') && !!this.sessionDir
+      && path.dirname(path.resolve(file)) === path.resolve(this.sessionDir) && fs.existsSync(file);
+  }
+  isCurrentSession(file) { return !!this.sessionFile && path.resolve(file) === path.resolve(this.sessionFile); }
+
+  async renameSession(file) {
+    if (!this.sessionFileOk(file)) return;
+    const old = sessionSummary(file)?.title || '';
+    const title = (await vscode.window.showInputBox({ title: this.t('Rename conversation'), value: old, prompt: this.t('New name for this conversation') }))
+      ?.replace(/\s+/g, ' ').trim().slice(0, 80);
+    if (!title || title === old) return this.pickSession();
+    try {
+      if (this.isCurrentSession(file) && this.client) await this.client.request({ type: 'set_session_name', name: title });
+      const fd = fs.openSync(file, 'r+');
+      try {
+        const buf = Buffer.alloc(4096);
+        const head = buf.toString('utf8', 0, fs.readSync(fd, buf, 0, buf.length, 0));
+        const nl = head.indexOf('\n');
+        const line = titleHeader(nl < 0 ? head : head.slice(0, nl), title);
+        if (!line) throw new Error('this conversation file has no title line, or the name is too long');
+        fs.writeSync(fd, line, 0, 'utf8');
+      } finally { fs.closeSync(fd); }
+    } catch (e) {
+      this.post({ type: 'error', text: `Could not rename the conversation: ${e.message}` });
+    }
+    return this.pickSession();
+  }
+
+  async deleteSession(file) {
+    if (!this.sessionFileOk(file)) return;
+    const title = sessionSummary(file)?.title || path.basename(file);
+    const yes = this.t('Delete');
+    const pick = await vscode.window.showWarningMessage(this.t('Delete this conversation?'), { modal: true, detail: `${title}\n\n${this.t('The file goes to the trash.')}` }, yes);
+    if (pick !== yes) return this.pickSession();
+    const current = this.isCurrentSession(file);
+    try {
+      await vscode.workspace.fs.delete(vscode.Uri.file(file), { useTrash: true });
+    } catch (e) {
+      return this.post({ type: 'error', text: `Could not delete the conversation: ${e.message}` });
+    }
+    if (current) return this.newSession(); // nothing left to continue
+    return this.pickSession();
+  }
+
+  // ---- files named in replies, and code blocks sent to the editor ----
+  resolveFile(file) {
+    if (!file || (!path.isAbsolute(file) && !this.cwd)) return null;
+    const abs = path.resolve(this.cwd || '', file);
+    try { return fs.statSync(abs).isFile() ? abs : null; } catch { return null; }
+  }
+
+  async openFile(ref) {
+    const { file, line, col } = parseFileRef(String(ref || ''));
+    const abs = this.resolveFile(file);
+    if (!abs) return this.post({ type: 'notice', text: `Could not find ${file} in the workspace.` });
+    const pos = new vscode.Position(Math.max(0, line - 1), Math.max(0, col - 1));
+    await vscode.window.showTextDocument(vscode.Uri.file(abs), { preview: true, selection: new vscode.Range(pos, pos) });
+  }
+
+  // The editor you were last in (the panel has focus, so activeTextEditor may be gone).
+  lastEditor() { return vscode.window.activeTextEditor || vscode.window.visibleTextEditors?.[0]; }
+
+  async insertCode(code) {
+    const ed = this.lastEditor();
+    if (!ed) return this.newFileFromCode(code, '');
+    await vscode.window.showTextDocument(ed.document, { viewColumn: ed.viewColumn, preview: false });
+    await ed.edit((b) => ed.selections.forEach((s) => b.replace(s, code)));
+  }
+
+  async newFileFromCode(code, lang) {
+    lang = lang.toLowerCase();
+    let doc;
+    try { doc = await vscode.workspace.openTextDocument({ content: code, language: LANG_IDS[lang] || lang || 'plaintext' }); }
+    catch { doc = await vscode.workspace.openTextDocument({ content: code }); } // unknown language id
+    await vscode.window.showTextDocument(doc, { preview: false });
   }
 
   setModel(m) {
@@ -1561,6 +1677,18 @@ class ChatProvider {
     const cfg = vscode.workspace.getConfiguration('ompChat');
     this.post({ type: 'mode', mode: cfg.get('approvalMode') });
     if (RESTART_KEYS.some((k) => e.affectsConfiguration('ompChat.' + k))) return this.restart();
+    if (e.affectsConfiguration('ompChat.thinkingLevel')) {
+      const level = cfg.get('thinkingLevel') || '';
+      this.post({ type: 'thinking_level', level });
+      if (!this.client) return; // the next start passes --thinking
+      // Changed inside the running omp, so the conversation carries on; "" goes back to omp's own default.
+      try { await this.client.request({ type: 'set_thinking_level', level: level || 'inherit' }); }
+      catch (err) {
+        if (!level) return this.restart();
+        this.post({ type: 'error', text: `Could not set the thinking level to ${level}: ${err.message}` });
+      }
+      return;
+    }
     if (e.affectsConfiguration('ompChat.model') && this.quietModel === cfg.get('model')) { this.quietModel = null; return; } // addKeyForm restarts
     if (e.affectsConfiguration('ompChat.model') && this.client) {
       const id = String(cfg.get('model'));
@@ -1844,6 +1972,16 @@ class ChatProvider {
         <option value="yolo">Full auto</option>
         <option value="plan">Plan (read-only)</option>
       </select>
+      <select id="think" title="How much the model thinks before answering (models without reasoning ignore it)">
+        <option value="">Thinking: default</option>
+        <option value="off">Thinking: off</option>
+        <option value="minimal">Thinking: minimal</option>
+        <option value="low">Thinking: low</option>
+        <option value="medium">Thinking: medium</option>
+        <option value="high">Thinking: high</option>
+        <option value="xhigh">Thinking: xhigh</option>
+        <option value="max">Thinking: max</option>
+      </select>
       <span class="spacer"></span>
       <button id="meter" class="pill" title="Usage &amp; limits" hidden><span class="codicon codicon-dashboard"></span><span id="meterText"></span></button>
       <button id="model" class="pill" title="Change model"><span id="modelName"></span><span class="codicon codicon-chevron-down"></span></button>
@@ -1909,4 +2047,4 @@ function activate(context) {
 
 function deactivate() {}
 
-module.exports = { activate, deactivate, _test: { toMarkdown, splitUserText, problemLines, listCommandFiles, commandFileText, parseMcpList } };
+module.exports = { activate, deactivate, _test: { parseFileRef, titleHeader, toMarkdown, splitUserText, problemLines, listCommandFiles, commandFileText, parseMcpList } };

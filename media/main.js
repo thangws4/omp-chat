@@ -25,6 +25,10 @@
   let pinned = [];     // files attached to every message: [{ rel, label }]
   let pending = [];    // images waiting to be sent: { mimeType, data (base64), url }
 
+  // Webview state survives reloads (per viewer convenience only: it can be missing).
+  const st = () => { try { return vscode.getState() || {}; } catch { return {}; } };
+  const saveState = (patch) => { try { vscode.setState({ ...st(), ...patch }); } catch { /* a convenience */ } };
+
   function el(tag, cls, text) {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
@@ -127,17 +131,68 @@
       const wrap = el('div', 'codewrap');
       pre.before(wrap);
       wrap.appendChild(pre);
-      const b = el('button', 'icon copy');
-      b.title = 'Copy';
-      b.appendChild(icon('copy'));
-      b.onclick = () => {
-        navigator.clipboard.writeText(pre.querySelector('code')?.textContent ?? pre.textContent);
+      const code = () => pre.querySelector('code')?.textContent ?? pre.textContent;
+      const lang = /language-(\S+)/.exec(pre.querySelector('code')?.className || '')?.[1] || '';
+      const bar = el('div', 'codeacts');
+      const act = (name, title, fn) => {
+        const b = el('button', 'icon');
+        b.title = title;
+        b.setAttribute('aria-label', title);
+        b.appendChild(icon(name));
+        b.onclick = () => fn(b);
+        bar.appendChild(b);
+      };
+      act('insert', 'Insert at cursor', () => vscode.postMessage({ type: 'insertCode', code: code() }));
+      act('new-file', 'Open in new file', () => vscode.postMessage({ type: 'newFileFromCode', code: code(), lang }));
+      act('copy', 'Copy', (b) => {
+        navigator.clipboard.writeText(code());
         b.firstChild.className = 'codicon codicon-check';
         setTimeout(() => { b.firstChild.className = 'codicon codicon-copy'; }, 1200);
-      };
-      wrap.appendChild(b);
+      });
+      wrap.appendChild(bar);
+    }
+    linkFiles(e);
+  }
+
+  // `src/app.ts:42` in a reply opens that file at that line. The extension says which spans are real files.
+  const PATHISH = /^(?:[A-Za-z]:)?[\w.@~\/\\-]*\.[\w]{1,12}(?::\d+(?::\d+)?|#L\d+(?:-L?\d+)?)?$/;
+  function linkFiles(e) {
+    const refs = new Set();
+    for (const c of e.querySelectorAll('code')) {
+      const s = c.textContent.trim();
+      if (c.closest('pre') || s.length > 260 || !PATHISH.test(s)) continue;
+      c.classList.add('fcand');
+      refs.add(s);
+    }
+    for (const a of e.querySelectorAll('a[href]')) { // [text](src/a.ts#L3): a relative link means a file
+      const h = a.getAttribute('href');
+      if (!/^[a-z][\w+.-]*:|^#|^\/\//i.test(h)) { a.dataset.file = decodeURI(h); a.classList.add('flink'); }
+    }
+    if (refs.size) vscode.postMessage({ type: 'checkPaths', refs: [...refs] });
+  }
+  function markPaths(m) {
+    const refs = new Set(m.refs || []), ok = new Set(m.ok || []);
+    for (const c of log.querySelectorAll('code.fcand')) {
+      const s = c.textContent.trim();
+      if (!refs.has(s)) continue; // asked by a later reply: its answer is still coming
+      c.classList.remove('fcand');
+      if (!ok.has(s)) continue;
+      c.dataset.file = s;
+      c.classList.add('flink');
+      c.title = 'Open file';
+      c.tabIndex = 0;
+      c.setAttribute('role', 'link');
     }
   }
+  log.addEventListener('click', (e) => {
+    const f = e.target.closest?.('[data-file]');
+    if (!f) return;
+    e.preventDefault();
+    vscode.postMessage({ type: 'openFile', ref: f.dataset.file });
+  });
+  log.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.matches?.('code[data-file]')) vscode.postMessage({ type: 'openFile', ref: e.target.dataset.file });
+  });
   function endAssistant() { finish(cur); cur = null; curThink = null; }
 
   function setBusy(b) {
@@ -152,6 +207,9 @@
     text = (text ?? input.value).trim();
     if (!text && !pending.length) return;
     const images = pending.map(({ mimeType, data }) => ({ mimeType, data }));
+    if (text) sent = [...sent.filter((x) => x !== text), text].slice(-50);
+    histAt = -1;
+    saveState({ sent, draft: '' });
     input.value = '';
     updateShellMode();
     pending = [];
@@ -1170,6 +1228,14 @@
         };
         row.appendChild(star);
       }
+      for (const a of it.actions || []) { // e.g. rename / delete a conversation
+        const b = el('button', 'icon pact');
+        b.title = a.title;
+        b.setAttribute('aria-label', a.title);
+        b.appendChild(icon(a.icon));
+        b.onmousedown = (e) => { e.preventDefault(); e.stopPropagation(); hidePicker(); vscode.postMessage(a.msg); };
+        row.appendChild(b);
+      }
       row.onmousedown = (e) => { e.preventDefault(); choosePicked(i); };
       list.appendChild(row);
     });
@@ -1195,6 +1261,10 @@
     } else if (e.key === 'Escape') {
       hidePicker();
       input.focus();
+    } else if (pk.kind === 'history' && (e.key === 'F2' || (e.key === 'Delete' && !pk.filter?.value))) {
+      const a = pk.items[pk.active].actions?.[e.key === 'F2' ? 0 : 1]; // Delete with filter text edits the filter
+      hidePicker();
+      if (a) vscode.postMessage(a.msg);
     } else return false;
     e.preventDefault();
     return true;
@@ -1242,7 +1312,9 @@
     return t >= today ? 'Today' : t >= today - day ? 'Yesterday' : t >= today - 7 * day ? 'Previous 7 days' : 'Older';
   }
   function showSessions(m) { // the list comes newest first
-    const all = m.list.map((x) => ({ key: x.title, label: x.title, desc: ago(x.when), icon: x.current ? 'check' : 'comment-discussion', file: x.file, group: dayGroup(x.when) }));
+    const all = m.list.map((x) => ({ key: x.title, label: x.title, desc: ago(x.when), icon: x.current ? 'check' : 'comment-discussion', file: x.file, group: dayGroup(x.when),
+      actions: [{ icon: 'edit', title: 'Rename (F2)', msg: { type: 'renameSession', file: x.file } },
+        { icon: 'trash', title: 'Delete (Del)', msg: { type: 'deleteSession', file: x.file } }] }));
     pk = null;
     openPicker('history', all, (it) => vscode.postMessage({ type: 'openSession', file: it.file }));
   }
@@ -1326,6 +1398,7 @@
   modelBtn.onclick = () => (pk?.kind === 'model' ? hidePicker() : vscode.postMessage({ type: 'pickModel' }));
   $('meter').onclick = () => vscode.postMessage({ type: 'usage' });
   modeSel.onchange = () => vscode.postMessage({ type: 'setMode', mode: modeSel.value });
+  $('think').onchange = () => vscode.postMessage({ type: 'setThinking', level: $('think').value });
   ctxEye.onclick = () => setContextOn(false);
   $('ctxPin').onclick = () => contextRel && vscode.postMessage({ type: 'pinFile', rel: contextRel });
   $('attach').onclick = () => {
@@ -1364,8 +1437,33 @@
     if (e.key === 'Escape' && busy && !pk && !openForm) { e.preventDefault(); vscode.postMessage({ type: 'stop' }); }
   });
 
+  // ↑ / ↓ in an empty box (or on a recalled message you have not edited) walk through what you sent, like a shell.
+  let sent = Array.isArray(st().sent) ? st().sent : [];
+  let histAt = -1; // index into sent while browsing, -1 otherwise
+  function recall(e) {
+    const up = e.key === 'ArrowUp';
+    if ((!up && e.key !== 'ArrowDown') || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey || !sent.length) return false;
+    const browsing = histAt >= 0 && input.value === sent[histAt];
+    if (!browsing && input.value) return false;
+    if (!browsing) histAt = -1;
+    // Inside a recalled multi-line message the arrows still move the caret, until it reaches the first / last line.
+    const v = input.value, p = input.selectionStart;
+    if (up ? v.lastIndexOf('\n', p - 1) >= 0 : v.indexOf('\n', p) >= 0) return false;
+    if (!up && histAt < 0) return false;
+    histAt = up ? (histAt < 0 ? sent.length - 1 : Math.max(0, histAt - 1)) : histAt + 1;
+    if (histAt >= sent.length) histAt = -1;
+    input.value = histAt < 0 ? '' : sent[histAt];
+    const end = up ? 0 : input.value.length; // land where the next press keeps going
+    input.setSelectionRange(end, end);
+    autosize();
+    updateShellMode();
+    e.preventDefault();
+    return true;
+  }
+
   input.addEventListener('keydown', (e) => {
     if (pk && !ownFilter(pk) && pickerKeys(e)) return;
+    if (recall(e)) return;
     if (e.key === 'Tab' && e.shiftKey) { e.preventDefault(); return cycleMode(); }
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   });
@@ -1375,7 +1473,9 @@
     $('box').classList.toggle('shellmode', on);
     $('shellHint').hidden = !on;
   }
-  input.addEventListener('input', () => { autosize(); updateShellMode(); if (pk) pk.active = 0; updateInlinePicker(); });
+  input.addEventListener('input', () => { autosize(); updateShellMode(); if (pk) pk.active = 0; updateInlinePicker(); saveState({ draft: input.value }); });
+  // What you were typing comes back after a reload.
+  if (st().draft) { input.value = st().draft; autosize(); updateShellMode(); }
   input.addEventListener('click', updateInlinePicker); // caret moved into / out of a mention
   input.addEventListener('blur', () => setTimeout(() => { if (pk && !ownFilter(pk)) hidePicker(); }, 150));
 
@@ -1566,6 +1666,8 @@
         break;
       }
       case 'mode': modeSel.value = m.mode; break;
+      case 'thinking_level': $('think').value = m.level || ''; break;
+      case 'paths': markPaths(m); break;
       case 'meter': showMeter(m); break;
       case 'usage': showUsage(m); break;
       case 'commands': commands = m.list || []; break;
