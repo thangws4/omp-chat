@@ -270,7 +270,12 @@
     "$(sync~spin) OMP: working": "$(sync~spin) OMP: đang làm",
     "$(check) OMP: done": "$(check) OMP: xong",
     "(click to open)": "(bấm để mở)",
-    "Fix with OMP Chat": "Sửa bằng OMP Chat"
+    "Fix with OMP Chat": "Sửa bằng OMP Chat",
+    "Jump to latest": "Xuống tin mới nhất",
+    "Today": "Hôm nay",
+    "Yesterday": "Hôm qua",
+    "Previous 7 days": "7 ngày qua",
+    "Older": "Cũ hơn"
   },
   "patterns": [
     ["^Your models · (\\d+)$", "Model của bạn · $1"],
@@ -286,6 +291,7 @@
     ["^(\\d+) subagents?$", "$1 subagent"],
     ["^(\\d+) model calls?$", "$1 lượt gọi model"],
     ["^(\\d+) tool calls?$", "$1 lượt gọi công cụ"],
+    ["^Ran (\\d+) tools$", "Đã chạy $1 công cụ"],
     ["^(.+) · (.+)$", "$1 · $2"],
     ["^(\\S+) in$", "$1 vào"],
     ["^(\\S+) out$", "$1 ra"],

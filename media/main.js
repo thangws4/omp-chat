@@ -33,7 +33,19 @@
   }
   const icon = (name, extra) => el('span', `codicon codicon-${name}${extra ? ' ' + extra : ''}`);
   const mascot = () => $('mascot').content.firstElementChild.cloneNode(true);
-  function scroll() { log.scrollTop = log.scrollHeight; }
+  // Follow new output only while you are at the bottom; scrolled up to read, you stay put and get a "↓" button.
+  const jump = $('jump');
+  let stick = true;
+  log.addEventListener('scroll', () => {
+    stick = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+    if (stick) jump.hidden = true;
+  });
+  function scroll(force) {
+    if (force) stick = true;
+    if (stick) { log.scrollTop = log.scrollHeight; jump.hidden = true; }
+    else jump.hidden = false;
+  }
+  jump.onclick = () => { scroll(true); input.focus(); };
 
   // ---- turns: your messages are right-aligned bubbles; OMP's replies sit on the left under its avatar ----
   function newTurn(kind) {
@@ -111,6 +123,10 @@
     e._raf = 0;
     render(e);
     for (const pre of e.querySelectorAll('pre')) {
+      // A wrapper holds the copy button, so it stays put while the (height-capped) block scrolls.
+      const wrap = el('div', 'codewrap');
+      pre.before(wrap);
+      wrap.appendChild(pre);
       const b = el('button', 'icon copy');
       b.title = 'Copy';
       b.appendChild(icon('copy'));
@@ -119,13 +135,14 @@
         b.firstChild.className = 'codicon codicon-check';
         setTimeout(() => { b.firstChild.className = 'codicon codicon-copy'; }, 1200);
       };
-      pre.appendChild(b);
+      wrap.appendChild(b);
     }
   }
   function endAssistant() { finish(cur); cur = null; curThink = null; }
 
   function setBusy(b) {
     busy = b;
+    log.setAttribute('aria-busy', String(b)); // screen readers read the reply once, when it is complete
     syncSendStop();
     sendBtn.title = b ? 'Queue message (Enter)' : 'Send (Enter)';
     if (b) showProgress(); else clearProgress();
@@ -375,6 +392,28 @@
       }
     }
     return box;
+  }
+
+  // Finished tool rows (and the thinking between them) just above a new tool fold into one "Ran N tools"
+  // row, so a long run doesn't bury the conversation. The running row, file changes, approvals and
+  // subagent cards stay outside: they end the run.
+  const FOLD = 'details.tool:not(.running), details.thinking';
+  function foldTools(b) {
+    const run = [];
+    let g = null;
+    for (let e = b.lastElementChild; e; e = e.previousElementSibling) {
+      if (e.matches(FOLD)) { run.unshift(e); continue; }
+      if (e.classList.contains('tgroup')) g = e;
+      break;
+    }
+    const isTool = (e) => e.classList.contains('tool');
+    const n = (g ? [...g.children].filter(isTool).length : 0) + run.filter(isTool).length;
+    if (!run.length || n < 2) return;
+    if (!g) { g = el('details', 'tgroup'); g.appendChild(el('summary')); run[0].before(g); }
+    g.append(...run);
+    const s = g.firstElementChild;
+    s.textContent = '';
+    s.append(icon(g.querySelector(':scope > .tool.err') ? 'warning' : 'checklist'), el('span', '', `Ran ${n} tools`));
   }
 
   function showDialog(m) {
@@ -1107,8 +1146,13 @@
       popup.appendChild(head);
     }
     const list = el('div', 'plist');
+    list.setAttribute('role', 'listbox');
+    const grouped = !pk.filter?.value; // filtered results are ranked, not in date order
     pk.items.forEach((it, i) => {
+      if (grouped && it.group && it.group !== pk.items[i - 1]?.group) list.appendChild(el('div', 'pgroup', it.group));
       const row = el('div', 'item' + (i === pk.active ? ' active' : ''));
+      row.setAttribute('role', 'option');
+      row.setAttribute('aria-selected', String(i === pk.active));
       if (it.icon) row.appendChild(icon(it.icon));
       row.appendChild(el('span', 'pname', it.label));
       if (it.desc) row.appendChild(el('span', 'pdesc', it.desc));
@@ -1193,8 +1237,12 @@
     if (s < 86400) return Math.floor(s / 3600) + ' h ago';
     return Math.floor(s / 86400) + ' d ago';
   }
-  function showSessions(m) {
-    const all = m.list.map((x) => ({ key: x.title, label: x.title, desc: ago(x.when), icon: x.current ? 'check' : 'comment-discussion', file: x.file }));
+  function dayGroup(t) {
+    const today = new Date().setHours(0, 0, 0, 0), day = 86400000;
+    return t >= today ? 'Today' : t >= today - day ? 'Yesterday' : t >= today - 7 * day ? 'Previous 7 days' : 'Older';
+  }
+  function showSessions(m) { // the list comes newest first
+    const all = m.list.map((x) => ({ key: x.title, label: x.title, desc: ago(x.when), icon: x.current ? 'check' : 'comment-discussion', file: x.file, group: dayGroup(x.when) }));
     pk = null;
     openPicker('history', all, (it) => vscode.postMessage({ type: 'openSession', file: it.file }));
   }
@@ -1356,11 +1404,11 @@
         for (const [k, s] of subData) if (s.status !== 'running') barDismissed.add(k); // finished ones leave the bar
         renderAgentsBar();
         showProgress();
-        scroll();
+        scroll(true); // you just sent it: follow the reply
         break;
       }
       case 'text':
-        if (!cur) { cur = add('md'); cur._raw = ''; }
+        if (!cur) { clearProgress(); foldTools(body()); cur = add('md'); cur._raw = ''; }
         cur._raw += m.delta;
         renderSoon(cur);
         break;
@@ -1380,6 +1428,7 @@
       case 'tool_start': {
         endAssistant();
         clearProgress();
+        foldTools(body());
         const d = el('details', 'tool running');
         const s = el('summary');
         let detail = String(toolDetail(m.args) || '');
@@ -1503,6 +1552,7 @@
       case 'clear':
         for (const n of [...log.querySelectorAll('.turn')]) n.remove();
         welcome.hidden = false;
+        scroll(true);
         turn = null; cur = null; curThink = null; progress = null;
         tools.clear(); dialogs.clear(); toolRows.clear(); subCards.clear(); subData.clear(); barDismissed = new Set();
         renderAgentsBar();

@@ -1804,7 +1804,7 @@ class ChatProvider {
 </head><body>
 <template id="mascot">${mascot}</template>
 <div id="sheet" hidden></div>
-<div id="log">
+<div id="log" role="log" aria-live="polite">
   <div id="welcome">
     <div class="hero">${mascot}</div>
     <h2>OMP Chat</h2>
@@ -1818,6 +1818,7 @@ class ChatProvider {
   </div>
 </div>
 <div id="composer">
+  <button id="jump" class="icon" hidden title="Jump to latest" aria-label="Jump to latest"><span class="codicon codicon-arrow-down"></span></button>
   <div id="popup" hidden></div>
   <div id="agents" hidden></div>
   <div id="todos" hidden></div>
