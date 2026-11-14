@@ -18,6 +18,8 @@
   let commands = [];
   let useContext = true;
   let contextLabel = null;
+  let contextRel = null;
+  let pinned = [];     // files attached to every message: [{ rel, label }]
   let pending = [];    // images waiting to be sent: { mimeType, data (base64), url }
 
   function el(tag, cls, text) {
@@ -1087,7 +1089,50 @@
   }
   function setContextOn(on) {
     useContext = on;
-    ctxBox.hidden = !on || !contextLabel; // removed with ✕; comes back when you open another file
+    // The open file's chip: removed with ✕ (comes back when you open another file); hidden when it is pinned anyway.
+    $('ctxChip').hidden = !on || !contextLabel || pinned.some((p) => p.rel === contextRel);
+    ctxBox.hidden = $('ctxChip').hidden && !pinned.length;
+  }
+  function renderPinned() {
+    const box = $('pinned');
+    box.textContent = '';
+    for (const p of pinned) {
+      const c = el('span', 'chip pinchip');
+      c.title = `${p.rel}\nAttached to every message until you remove it.`;
+      const x = el('button', 'ctxx');
+      x.title = 'Remove';
+      x.appendChild(icon('close'));
+      x.onclick = () => vscode.postMessage({ type: 'unpinFile', rel: p.rel });
+      c.append(icon('pinned'), el('span', 'plabel', p.label), x);
+      box.appendChild(c);
+    }
+  }
+
+  // Under each finished reply: copy the whole answer, and what the turn cost.
+  function turnFooter(t) {
+    if (!t || !t.querySelector('.md, .tool')) return t?._foot;
+    const f = t._foot || (t._foot = t.appendChild(el('div', 'tfoot')));
+    if (f._copy || !t.querySelector('.md')) return f; // tools only: nothing to copy
+    const b = f._copy = el('button', 'icon');
+    b.title = 'Copy answer (Markdown)';
+    b.appendChild(icon('copy'));
+    b.onclick = () => {
+      navigator.clipboard.writeText([...t.querySelectorAll('.md')].map((e) => (e._raw || '').trim()).filter(Boolean).join('\n\n'));
+      b.firstChild.className = 'codicon codicon-check';
+      setTimeout(() => { b.firstChild.className = 'codicon codicon-copy'; }, 1200);
+    };
+    f.prepend(b);
+    return f;
+  }
+  const kTok = (n) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n));
+  function showTurnStats(m) {
+    const f = turnFooter(turn);
+    if (!f) return;
+    const cost = m.cost > 0 ? ` · $${m.cost < 0.01 ? m.cost.toFixed(4) : m.cost.toFixed(2)}` : ' · free';
+    const s = el('span', 'tstats', `${kTok(m.input)} in · ${kTok(m.output)} out${cost}${m.seconds ? ` · ${m.seconds}s` : ''}`);
+    s.title = 'Tokens sent and received this turn, and what it cost (as priced by omp)';
+    f.querySelector('.tstats')?.remove();
+    f.appendChild(s);
   }
 
   sendBtn.onclick = () => send();
@@ -1096,6 +1141,7 @@
   $('meter').onclick = () => vscode.postMessage({ type: 'usage' });
   modeSel.onchange = () => vscode.postMessage({ type: 'setMode', mode: modeSel.value });
   ctxEye.onclick = () => setContextOn(false);
+  $('ctxPin').onclick = () => contextRel && vscode.postMessage({ type: 'pinFile', rel: contextRel });
   $('attach').onclick = () => {
     const p = input.selectionStart;
     const lead = p > 0 && !/\s/.test(input.value[p - 1]) ? ' @' : '@'; // a mention must start a word
@@ -1162,11 +1208,12 @@
           t._body.appendChild(g);
         }
         if (m.text) t._body.appendChild(el('div', 'utext', m.text));
-        if (m.context) {
+        for (const label of [].concat(m.context || [])) {
           const c = el('div', 'uctx');
-          c.append(icon('file'), el('span', '', m.context));
+          c.append(icon('file'), el('span', '', label));
           t._body.appendChild(c);
         }
+        turnFooter(turn);
         turn = null; // the reply starts a new OMP turn
         for (const [k, s] of subData) if (s.status !== 'running') barDismissed.add(k); // finished ones leave the bar
         renderAgentsBar();
@@ -1293,7 +1340,9 @@
         break;
       }
       case 'busy': setBusy(true); break;
-      case 'idle': endAssistant(); setBusy(false); break;
+      case 'idle': endAssistant(); setBusy(false); turnFooter(turn); break;
+      case 'turnStats': showTurnStats(m); break;
+      case 'focusInput': input.focus(); break;
       case 'error':
       case 'notice': {
         const e = add(m.type === 'error' ? 'errorline' : 'noticeline');
@@ -1335,13 +1384,19 @@
       case 'context':
         if (m.label !== contextLabel) useContext = true;
         contextLabel = m.label;
+        contextRel = m.rel || null;
+        pinned = m.pinned || [];
+        renderPinned();
         setContextOn(useContext);
         ctxLabel.textContent = m.label || '';
         $('ctxChip').title = `${m.full || m.label || ''}\nSent with your next message.`;
         ctxIcon.className = 'codicon codicon-' + (m.selection ? 'selection' : 'file');
         break;
       case 'files':
-        files = m.list.map((p) => ({ key: p, short: p.split('/').pop(), label: p.split('/').pop(), desc: p.includes('/') ? p : '', icon: 'file' }));
+        files = [
+          { key: 'problems', short: 'problems', label: 'problems', desc: 'errors and warnings from the Problems panel', icon: 'warning' },
+          { key: 'terminal', short: 'terminal', label: 'terminal', desc: 'recent output of the active terminal', icon: 'terminal' },
+          ...m.list.map((p) => ({ key: p, short: p.split('/').pop(), label: p.split('/').pop(), desc: p.includes('/') ? p : '', icon: 'file' }))];
         if (pk?.kind === 'file') updateInlinePicker();
         break;
       case 'models': showModels(m); break;

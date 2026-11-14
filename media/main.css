@@ -351,7 +351,15 @@ textarea.cinput { font-family: var(--vscode-editor-font-family); }
 #ctx[hidden] { display: none; }
 #ctx .chip { font-size: .85em; max-width: 100%; background: transparent; }
 #ctxLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#ctx { display: flex; flex-wrap: wrap; gap: 4px; }
+#ctxChip[hidden] { display: none; }
+#pinned { display: contents; }
+.pinchip { font-size: .85em; max-width: 100%; }
+.pinchip .plabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tfoot { display: flex; align-items: center; gap: 8px; margin: 2px 0 0 22px; color: var(--vscode-descriptionForeground); font-size: .85em; opacity: .75; }
+.turn.bot:hover .tfoot, .tfoot:focus-within { opacity: 1; }
 .ctxx { display: inline-flex; padding: 0; margin-right: -4px; border-radius: 4px; opacity: .7; }
+#ctxPin { margin-right: 0; }
 .ctxx:hover { opacity: 1; background: var(--vscode-toolbar-hoverBackground); }
 .ctxx .codicon { font-size: 12px; }
 textarea {

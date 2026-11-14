@@ -2,43 +2,183 @@
   "name": "omp-chat",
   "displayName": "OMP Chat by DT",
   "description": "AI coding chat panel for VS Code, powered by the oh-my-pi (omp) agent and OpenRouter / DeepSeek models.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "dtcode-dev",
   "icon": "media/logo.png",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["AI", "Chat"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Chat"
+  ],
   "main": "./extension.js",
   "contributes": {
     "viewsContainers": {
       "activitybar": [
-        { "id": "ompChat", "title": "OMP Chat", "icon": "media/icon.svg" }
+        {
+          "id": "ompChat",
+          "title": "OMP Chat",
+          "icon": "media/icon.svg"
+        }
       ]
     },
     "views": {
       "ompChat": [
-        { "type": "webview", "id": "ompChat.view", "name": "Chat" }
+        {
+          "type": "webview",
+          "id": "ompChat.view",
+          "name": "Chat"
+        }
       ]
     },
     "commands": [
-      { "command": "ompChat.focus", "title": "Open", "category": "OMP Chat" },
-      { "command": "ompChat.newSession", "title": "New Chat", "category": "OMP Chat", "icon": "$(add)" },
-      { "command": "ompChat.history", "title": "Show Chats…", "category": "OMP Chat", "icon": "$(history)" },
-      { "command": "ompChat.usage", "title": "Usage & Limits", "category": "OMP Chat", "icon": "$(graph)" },
-      { "command": "ompChat.plugins", "title": "Plugins & Skills", "category": "OMP Chat", "icon": "$(extensions)" },
-      { "command": "ompChat.pickModel", "title": "Choose Model…", "category": "OMP Chat" },
-      { "command": "ompChat.manageModels", "title": "Manage Models…", "category": "OMP Chat" },
-      { "command": "ompChat.setApiKey", "title": "Set API Key…", "category": "OMP Chat" },
-      { "command": "ompChat.stop", "title": "Stop Agent", "category": "OMP Chat" }
+      {
+        "command": "ompChat.focus",
+        "title": "Open",
+        "category": "OMP Chat"
+      },
+      {
+        "command": "ompChat.newSession",
+        "title": "New Chat",
+        "category": "OMP Chat",
+        "icon": "$(add)"
+      },
+      {
+        "command": "ompChat.history",
+        "title": "Show Chats…",
+        "category": "OMP Chat",
+        "icon": "$(history)"
+      },
+      {
+        "command": "ompChat.usage",
+        "title": "Usage & Limits",
+        "category": "OMP Chat",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "ompChat.plugins",
+        "title": "Plugins & Skills",
+        "category": "OMP Chat",
+        "icon": "$(extensions)"
+      },
+      {
+        "command": "ompChat.pickModel",
+        "title": "Choose Model…",
+        "category": "OMP Chat"
+      },
+      {
+        "command": "ompChat.manageModels",
+        "title": "Manage Models…",
+        "category": "OMP Chat"
+      },
+      {
+        "command": "ompChat.setApiKey",
+        "title": "Set API Key…",
+        "category": "OMP Chat"
+      },
+      {
+        "command": "ompChat.stop",
+        "title": "Stop Agent",
+        "category": "OMP Chat"
+      },
+      {
+        "command": "ompChat.exportChat",
+        "title": "Export Chat as Markdown",
+        "category": "OMP Chat",
+        "icon": "$(export)"
+      },
+      {
+        "command": "ompChat.addFile",
+        "title": "Add File to OMP Chat",
+        "category": "OMP Chat"
+      },
+      {
+        "command": "ompChat.ask",
+        "title": "Ask OMP Chat",
+        "category": "OMP Chat"
+      },
+      {
+        "command": "ompChat.explain",
+        "title": "Explain with OMP Chat",
+        "category": "OMP Chat"
+      },
+      {
+        "command": "ompChat.fix",
+        "title": "Fix with OMP Chat",
+        "category": "OMP Chat"
+      }
     ],
     "menus": {
       "view/title": [
-        { "command": "ompChat.newSession", "when": "view == ompChat.view", "group": "navigation@1" },
-        { "command": "ompChat.history", "when": "view == ompChat.view", "group": "navigation@2" },
-        { "command": "ompChat.usage", "when": "view == ompChat.view", "group": "navigation@3" },
-        { "command": "ompChat.plugins", "when": "view == ompChat.view", "group": "navigation@4" },
-        { "command": "ompChat.pickModel", "when": "view == ompChat.view", "group": "1_settings@1" },
-        { "command": "ompChat.manageModels", "when": "view == ompChat.view", "group": "1_settings@1" },
-        { "command": "ompChat.setApiKey", "when": "view == ompChat.view", "group": "1_settings@2" }
+        {
+          "command": "ompChat.newSession",
+          "when": "view == ompChat.view",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ompChat.history",
+          "when": "view == ompChat.view",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ompChat.usage",
+          "when": "view == ompChat.view",
+          "group": "navigation@3"
+        },
+        {
+          "command": "ompChat.plugins",
+          "when": "view == ompChat.view",
+          "group": "navigation@4"
+        },
+        {
+          "command": "ompChat.pickModel",
+          "when": "view == ompChat.view",
+          "group": "1_settings@1"
+        },
+        {
+          "command": "ompChat.manageModels",
+          "when": "view == ompChat.view",
+          "group": "1_settings@1"
+        },
+        {
+          "command": "ompChat.setApiKey",
+          "when": "view == ompChat.view",
+          "group": "1_settings@2"
+        },
+        {
+          "command": "ompChat.exportChat",
+          "when": "view == ompChat.view",
+          "group": "2_chat@1"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "ompChat.ask",
+          "group": "0_ompChat@1"
+        },
+        {
+          "command": "ompChat.explain",
+          "when": "editorHasSelection",
+          "group": "0_ompChat@2"
+        },
+        {
+          "command": "ompChat.fix",
+          "group": "0_ompChat@3"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "ompChat.addFile",
+          "when": "!explorerResourceIsFolder",
+          "group": "0_ompChat@1"
+        }
+      ],
+      "editor/title/context": [
+        {
+          "command": "ompChat.addFile",
+          "group": "0_ompChat@1"
+        }
       ]
     },
     "configuration": {
@@ -56,7 +196,13 @@
         },
         "ompChat.approvalMode": {
           "type": "string",
-          "enum": ["always-ask", "always-ask-cached", "write", "yolo", "plan"],
+          "enum": [
+            "always-ask",
+            "always-ask-cached",
+            "write",
+            "yolo",
+            "plan"
+          ],
           "enumDescriptions": [
             "Ask before every file write/edit and command (read-only tools run freely).",
             "Like always-ask, but approvals can be remembered for a file or folder.",
@@ -69,11 +215,16 @@
         },
         "ompChat.extraArgs": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Extra CLI arguments appended after --mode rpc."
         }
       }
     }
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.js\""
   }
 }

@@ -94,12 +94,22 @@ When the agent keeps a to-do list, it is pinned above the box (**Todos 2/5**): �
 | In the message box | What it does |
 |---|---|
 | File chip (📄 `calc.py`) above the box | The open file is sent with your message. If you select code, the chip shows the line range and the selected code is sent. Click ✕ on the chip to leave it out; it comes back when you open another file or select code |
+| 📌 on the file chip | Keeps that file attached to every message, even after you switch files. Pinned files show as their own chips; ✕ removes one. Also: right-click a file in the Explorer (or an editor tab) → **Add File to OMP Chat** |
 | `@` | Lists workspace files as you type (`@cal…`). **↑ ↓** to move, **Enter** or **Tab** to insert, **Esc** to close. The `@` button does the same |
+| `@problems` | Sends the errors and warnings from VS Code's **Problems** panel with your message |
+| `@terminal` | Sends the recent output of the active terminal (copied through the clipboard, which is put back afterwards) |
 | Images | Paste with **Ctrl+V**, drop onto the box, or use the 🖼 button. Up to 5 per message; large images are scaled down. The model must support images |
 | `/` | Lists omp's slash commands, for example `/session`, `/compact`, `/retry`, `/mcp` |
 | `!` | Runs the rest as a shell command in the workspace (the box switches to shell mode). See [Terminal](#terminal) |
 
 The suggestions on the start screen (**Explain this file**, **Find and fix bugs**, **Write tests**) send a ready-made request about the open file.
+
+Under each finished reply: 📋 copies the whole answer as Markdown, followed by what the turn used, for example `13k in · 312 out · $0.0021 · 14s` (tokens sent and received, cost as priced by omp, time).
+
+### From the editor
+
+- Right-click in a file: **Ask OMP Chat** (opens the chat with the file or selection attached), **Explain with OMP Chat** (when code is selected) and **Fix with OMP Chat**.
+- On a red or yellow squiggle, the light bulb (**Ctrl+.**) offers **Fix with OMP Chat**: the problems on that line go to the agent.
 
 ### Agent status at a glance
 
@@ -177,6 +187,7 @@ The longer conversation is kept as an earlier chat (🕘). In a reopened convers
 - Reloading the window reopens the last conversation of the workspace.
 - **+** (title bar) starts a new chat.
 - **🕘** (title bar) lists earlier conversations of this workspace; type to filter, **Enter** to open. Their diffs and **Undo** buttons work again.
+- **…** → **Export Chat as Markdown** opens the conversation as a Markdown document (your messages, replies, tool calls and shell commands) to save or share.
 
 Conversations are stored by omp in `~/.omp/agent/sessions/`.
 
@@ -252,6 +263,9 @@ Type `/` to see everything available on your machine.
 | OMP Chat: Choose Model… | Model name in the toolbar, or **…** menu |
 | OMP Chat: Manage Models… | **…** menu, or "Manage models…" in the model list |
 | OMP Chat: Set API Key… | **…** menu |
+| OMP Chat: Export Chat as Markdown | **…** menu |
+| OMP Chat: Add File to OMP Chat | Right-click a file in the Explorer or an editor tab |
+| OMP Chat: Ask / Explain / Fix with OMP Chat | Right-click in the editor; Fix also in the light bulb |
 | OMP Chat: Stop Agent | **■** / **Esc** |
 
 | Key | In the message box |

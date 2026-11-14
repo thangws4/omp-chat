@@ -66,7 +66,58 @@ function splitUserText(text) {
   let m = /^\[Selection from ([^\]\n]+)\]\n```[^\n]*\n[\s\S]*?\n```\n\n/.exec(text);
   if (!m) m = /^\[Current file: ([^\]\n]+)\]\n\n/.exec(text);
   if (m) { context = m[1]; text = text.slice(m[0].length); }
-  return { text, context };
+  const files = [];
+  m = /^\[Attached files: ([^\]\n]+)\]\n\n/.exec(text);
+  if (m) { files.push(...m[1].split(', ')); text = text.slice(m[0].length); }
+  while ((m = /^\[(?:Problems|Terminal output)[^\]\n]*\]\n```[^\n]*\n[\s\S]*?\n```\n\n/.exec(text))) text = text.slice(m[0].length);
+  return { text, context, files };
+}
+
+// Errors and warnings from VS Code's Problems panel as "path:line: [error] message (source)" lines.
+function problemLines(entries, max = 60) {
+  const out = [];
+  for (const [uri, diags] of entries) {
+    if (uri.scheme !== 'file') continue;
+    const rel = vscode.workspace.asRelativePath(uri).replace(/\\/g, '/');
+    for (const d of diags) {
+      if (d.severity > 1) continue; // errors (0) and warnings (1) only
+      out.push(`${rel}:${d.range.start.line + 1}: [${d.severity === 0 ? 'error' : 'warning'}] ${d.message.split('\n')[0]}${d.source ? ` (${d.source})` : ''}`);
+    }
+  }
+  return out.length > max ? [...out.slice(0, max), `… and ${out.length - max} more`] : out;
+}
+
+const fence = (title, body) => `[${title}]\n\`\`\`\n${body.replace(/```/g, '``​`')}\n\`\`\``;
+
+// A conversation (omp's get_messages) as Markdown, for "Export Chat".
+function toMarkdown(messages, model) {
+  const out = [`# OMP Chat${model ? ` · ${model}` : ''}`, `_Exported ${new Date().toLocaleString()}_`];
+  for (const m of messages || []) {
+    if (m.role === 'user') {
+      const u = splitUserText(textOf(m.content));
+      if (!u.text) continue;
+      const ctx = [u.context, ...u.files].filter(Boolean);
+      out.push(`## You${ctx.length ? `  \n_${ctx.join(', ')}_` : ''}`, u.text);
+    } else if (m.role === 'assistant') {
+      const parts = [];
+      for (const p of m.content || []) {
+        if (p.type === 'text' && p.text?.trim()) parts.push(p.text.trim());
+        else if (p.type === 'toolCall') parts.push(`> 🔧 **${p.name}** ${toolArg(p.arguments)}`.trimEnd());
+      }
+      if (m.stopReason === 'error' && m.errorMessage) parts.push(`> ⚠ ${m.errorMessage.split('\n')[0]}`);
+      if (parts.length) out.push('## OMP', parts.join('\n\n'));
+    } else if (m.role === 'bashExecution') {
+      out.push('## You (shell)', `\`\`\`sh\n$ ${m.command}\n${(m.output || '').trimEnd().slice(-4000)}\n\`\`\``);
+    }
+  }
+  return out.join('\n\n') + '\n';
+}
+
+// The one argument worth showing for a tool call: a path, a command or a pattern.
+function toolArg(a) {
+  if (!a || typeof a !== 'object') return '';
+  const v = a.path || a.file_path || a.command || a.pattern || a.query || a.url || '';
+  return v ? `\`${String(v).split('\n')[0].slice(0, 200)}\`` : '';
 }
 
 // "retry-after-ms=17518000" in a provider error -> "4h 52m".
@@ -144,6 +195,8 @@ class ChatProvider {
     this.subagents = new Map();  // subagent id -> latest merged lifecycle/progress record
     this.subSeq = 0;
     this.qSeq = 0;
+    this.pinned = [];            // files you attached to every message until removed (workspace-relative)
+    this.turnUsage = null;       // tokens and cost summed over one agent turn
     this.newReadyPromise();
   }
 
@@ -417,6 +470,9 @@ class ChatProvider {
       case 'toggleFavorite': await this.toggleFavorite(m.id); return m.from === 'sheet' ? this.showModelsSheet() : undefined;
       case 'moveFavorite': return this.moveFavorite(m.id, m.dir);
       case 'manageModels': return this.showModelsSheet();
+      case 'pinFile': return this.pinFile(String(m.rel || ''));
+      case 'unpinFile': return this.unpinFile(m.rel);
+      case 'exportChat': return this.exportChat();
       case 'applyPlugins': return this.applyPlugins(Array.isArray(m.disabled) ? m.disabled : [], m.auto);
       case 'action': // buttons on error / notice lines
         switch (m.cmd) {
@@ -560,7 +616,7 @@ class ChatProvider {
           if (!u.text && !images.length) continue;
           if (unanswered) this.post({ type: 'notice', text: 'No reply: this request failed.' });
           // turn = position among omp's user entries; Rewind uses it to find the entry again.
-          this.post({ type: 'user', text: u.text, context: shortLabel(u.context), images, turn: ++this.turnSeq });
+          this.post({ type: 'user', text: u.text, context: [u.context, ...u.files].filter(Boolean).map(shortLabel), images, turn: ++this.turnSeq });
           unanswered = true;
         } else if (m.role === 'assistant') {
           unanswered = false;
@@ -677,6 +733,7 @@ class ChatProvider {
         break;
       case 'agent_start':
         this.wroteText = false;
+        this.turnUsage = { input: 0, output: 0, cost: 0, started: Date.now() };
         this.turnText = '';
         this.changedFiles = false;
         this.post({ type: 'busy' });
@@ -689,6 +746,12 @@ class ChatProvider {
       }
       case 'message_end':
         if (r.message?.role === 'assistant' && !this.replaying && r.message.stopReason !== 'error') this.countRequest();
+        if (r.message?.role === 'assistant' && this.turnUsage && r.message.usage) {
+          const u = r.message.usage;
+          this.turnUsage.input += (u.input || 0) + (u.cacheRead || 0) + (u.cacheWrite || 0);
+          this.turnUsage.output += u.output || 0;
+          this.turnUsage.cost += u.cost?.total || 0;
+        }
         if (r.message?.role === 'assistant') {
           // API failures (401, rate limit, network) arrive only here, as stopReason "error".
           if (r.message.stopReason === 'error') {
@@ -768,6 +831,10 @@ class ChatProvider {
       // agent_end. Treat either as "idle"; a later agent_start flips back.
       case 'agent_settled':
       case 'agent_end':
+        if (this.turnUsage && !this.replaying && this.turnUsage.input + this.turnUsage.output > 0) {
+          this.post({ type: 'turnStats', ...this.turnUsage, seconds: Math.round((Date.now() - this.turnUsage.started) / 1000) });
+        }
+        this.turnUsage = null;
         this.post({ type: 'idle' });
         this.busy = false;
         if (this.blocked) { this.explainBlocked(this.blocked); this.blocked = null; }
@@ -1179,7 +1246,83 @@ class ChatProvider {
 
   postContext() {
     const c = this.contextInfo();
-    this.post({ type: 'context', label: shortLabel(c?.label) || null, full: c?.label || null, selection: !!c?.text });
+    this.post({ type: 'context', label: shortLabel(c?.label) || null, full: c?.label || null, rel: c?.rel || null, selection: !!c?.text,
+      pinned: this.pinned.map((rel) => ({ rel, label: shortLabel(rel) })) });
+  }
+
+  // Attach a file to every message until you remove it (✕ on its chip). From the chip's pin, or the Explorer.
+  pinFile(fileOrUri) {
+    if (!fileOrUri) return;
+    const rel = (typeof fileOrUri === 'string' ? fileOrUri : vscode.workspace.asRelativePath(fileOrUri)).replace(/\\/g, '/');
+    if (!this.pinned.includes(rel)) this.pinned = [...this.pinned, rel].slice(-10);
+    this.postContext();
+  }
+
+  unpinFile(rel) {
+    this.pinned = this.pinned.filter((x) => x !== rel);
+    this.postContext();
+  }
+
+  // "@problems" and "@terminal" in a message: what they point at, sent along (not shown in your bubble).
+  async mentions(text) {
+    const blocks = [];
+    if (/(^|\s)@problems\b/.test(text)) {
+      const lines = problemLines(vscode.languages.getDiagnostics());
+      blocks.push(fence('Problems in the workspace', lines.length ? lines.join('\n') : 'No errors or warnings.'));
+    }
+    if (/(^|\s)@terminal\b/.test(text)) {
+      const out = await this.terminalText();
+      blocks.push(fence(`Terminal output${out ? `: ${vscode.window.activeTerminal.name}` : ''}`, out || 'No terminal is open.'));
+    }
+    return blocks;
+  }
+
+  // The active terminal's recent output. VS Code has no API to read a terminal, so this copies it.
+  // ponytail: select-all + copy through the clipboard (restored afterwards); shell-integration reads if this proves flaky.
+  async terminalText(maxLines = 200) {
+    const t = vscode.window.activeTerminal;
+    if (!t) return null;
+    const saved = await vscode.env.clipboard.readText();
+    const marker = `\u0000omp-${Date.now()}`;
+    await vscode.env.clipboard.writeText(marker);
+    try {
+      await vscode.commands.executeCommand('workbench.action.terminal.selectAll');
+      await vscode.commands.executeCommand('workbench.action.terminal.copySelection');
+      await vscode.commands.executeCommand('workbench.action.terminal.clearSelection');
+      const text = await vscode.env.clipboard.readText();
+      if (text === marker) return null;
+      return text.replace(/\s+$/, '').split(/\r?\n/).slice(-maxLines).join('\n').slice(-12000);
+    } finally {
+      await vscode.env.clipboard.writeText(saved);
+    }
+  }
+
+  // Editor menu and light-bulb actions: Explain / Fix the selection, or fix the problems on a line.
+  async editorAction(kind, uri, range) {
+    await this.reveal();
+    if (kind === 'ask') return this.post({ type: 'focusInput' });
+    if (kind === 'explain') return this.send('Explain this code.', true);
+    const ed = vscode.window.activeTextEditor;
+    uri = uri || ed?.document.uri;
+    range = range || ed?.selection;
+    const diags = uri ? vscode.languages.getDiagnostics(uri).filter((d) => d.severity <= 1 && (!range || (d.range.end.line >= range.start.line && d.range.start.line <= range.end.line))) : [];
+    if (!diags.length) return this.send('Find and fix the bugs in this code.', true);
+    const rel = vscode.workspace.asRelativePath(uri).replace(/\\/g, '/');
+    const lines = problemLines([[uri, diags]]);
+    const first = diags[0].range.start.line + 1;
+    return this.send(`Fix ${diags.length === 1 ? 'the problem' : `the ${diags.length} problems`} in ${rel}:${first}`, false, [], [fence(`Problems in ${rel}`, lines.join('\n'))]);
+  }
+
+  // The conversation as a Markdown document you can save or share.
+  async exportChat() {
+    const client = await this.ensureClient();
+    if (!client) return;
+    let md;
+    try { md = toMarkdown((await client.request({ type: 'get_messages' })).messages, this.modelName); }
+    catch (e) { return this.post({ type: 'error', text: `Could not export: ${e.message}` }); }
+    if (!/^## /m.test(md)) return this.post({ type: 'notice', text: 'Nothing to export yet.' });
+    const doc = await vscode.workspace.openTextDocument({ content: md, language: 'markdown' });
+    await vscode.window.showTextDocument(doc, { preview: false });
   }
 
   // Workspace files for the "@" picker in the panel.
@@ -1327,7 +1470,8 @@ class ChatProvider {
     if (!cancelled && client && this.client === client) client.send({ type: 'extension_ui_response', id: r.id, ...res });
   }
 
-  async send(text, withContext, images) {
+  // extra: blocks sent to the model ahead of your text but not shown in your bubble (problems, terminal output).
+  async send(text, withContext, images, extra = []) {
     text = (text || '').trim();
     // Pasted / attached images from the webview: [{ mimeType, data (base64) }], at most 5 per message.
     images = (Array.isArray(images) ? images : [])
@@ -1341,7 +1485,10 @@ class ChatProvider {
     if (/^!\s*\S/.test(text)) return this.runShell(text.replace(/^!\s*/, ''));
     const isCommand = text.startsWith('/'); // slash commands must reach omp verbatim
     const ctx = withContext && !isCommand ? this.contextInfo() : null;
-    let message = text;
+    const pinned = isCommand ? [] : this.pinned.filter((rel) => rel !== ctx?.rel);
+    const blocks = isCommand ? [] : [...extra, ...await this.mentions(text)];
+    let message = [...blocks, text].join('\n\n');
+    if (pinned.length) message = `[Attached files: ${pinned.join(', ')}]\n\n${message}`;
     if (ctx) {
       const head = ctx.text ? `[Selection from ${ctx.label}]\n\`\`\`${ctx.lang}\n${ctx.text.slice(0, 20000)}\n\`\`\`` : `[Current file: ${ctx.rel}]`;
       message = `${head}\n\n${message}`;
@@ -1355,7 +1502,7 @@ class ChatProvider {
       message = `${this.notes.join('\n')}\n\n${message}`;
       this.notes = [];
     }
-    const shown = { text, context: shortLabel(ctx?.label), images: images.map((i) => `data:${i.mimeType};base64,${i.data}`) };
+    const shown = { text, context: [ctx?.label, ...pinned].filter(Boolean).map(shortLabel), images: images.map((i) => `data:${i.mimeType};base64,${i.data}`) };
     if (this.busy && !isCommand) {
       // The agent is working: omp holds this until the turn allows it. Shown as "Queued" until delivered.
       const qid = 'q' + ++this.qSeq;
@@ -1489,8 +1636,9 @@ class ChatProvider {
   <div id="box">
     <div id="ctx" hidden>
       <div id="ctxChip" class="chip" title="Sent with your next message.">
-        <span id="ctxIcon" class="codicon codicon-file"></span><span id="ctxLabel"></span><button id="ctxEye" class="ctxx" title="Remove: don't send this file"><span class="codicon codicon-close"></span></button>
+        <span id="ctxIcon" class="codicon codicon-file"></span><span id="ctxLabel"></span><button id="ctxPin" class="ctxx" title="Keep this file attached to every message"><span class="codicon codicon-pin"></span></button><button id="ctxEye" class="ctxx" title="Remove: don't send this file"><span class="codicon codicon-close"></span></button>
       </div>
+      <span id="pinned"></span>
     </div>
     <div id="thumbs" hidden></div>
     <div id="shellHint" hidden><span class="codicon codicon-terminal"></span>Shell command: runs in the workspace, and the output joins the conversation</div>
@@ -1544,6 +1692,19 @@ function activate(context) {
     vscode.commands.registerCommand('ompChat.plugins', () => provider.showPlugins()),
     vscode.commands.registerCommand('ompChat.manageModels', () => provider.showModelsSheet()),
     vscode.commands.registerCommand('ompChat.setApiKey', () => provider.manageKeys()),
+    vscode.commands.registerCommand('ompChat.exportChat', () => provider.exportChat()),
+    vscode.commands.registerCommand('ompChat.addFile', (uri, all) => (Array.isArray(all) && all.length ? all : [uri || vscode.window.activeTextEditor?.document.uri]).forEach((u) => provider.pinFile(u)) || provider.reveal()),
+    vscode.commands.registerCommand('ompChat.ask', () => provider.editorAction('ask')),
+    vscode.commands.registerCommand('ompChat.explain', () => provider.editorAction('explain')),
+    vscode.commands.registerCommand('ompChat.fix', (uri, range) => provider.editorAction('fix', uri, range)),
+    vscode.languages.registerCodeActionsProvider({ scheme: 'file' }, {
+      provideCodeActions(doc, range, ctx) {
+        if (!ctx.diagnostics.some((d) => d.severity <= 1)) return [];
+        const a = new vscode.CodeAction('Fix with OMP Chat', vscode.CodeActionKind.QuickFix);
+        a.command = { command: 'ompChat.fix', title: 'Fix with OMP Chat', arguments: [doc.uri, range] };
+        return [a];
+      },
+    }, { providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }),
     vscode.workspace.onDidChangeConfiguration((e) => provider.onConfigChange(e)),
     vscode.window.onDidChangeActiveTextEditor(() => provider.postContext()),
     vscode.window.onDidChangeTextEditorSelection(() => provider.postContext()),
@@ -1553,4 +1714,4 @@ function activate(context) {
 
 function deactivate() {}
 
-module.exports = { activate, deactivate };
+module.exports = { activate, deactivate, _test: { toMarkdown, splitUserText, problemLines } };
