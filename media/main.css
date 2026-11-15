@@ -169,6 +169,8 @@ details > summary::-webkit-details-marker { display: none; }
   color: var(--vscode-descriptionForeground);
 }
 .sname { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.smodel { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .85em; padding: 0 6px; border-radius: 8px;
+  background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
 .smeta { flex: none; font-size: .85em; color: var(--vscode-descriptionForeground); }
 .stask { margin-top: 2px; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .snow { margin-top: 2px; font-family: var(--vscode-editor-font-family); font-size: .9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -142,7 +142,11 @@ The agent can always read files. Whether it must ask before changing anything de
 | **Full auto** | Nothing |
 | **Plan (read-only)** | Nothing: every edit and command is refused. The agent studies the code and writes a plan |
 
-In **Plan** mode, when the plan is written a card asks **Execute, ask before edits**, **Execute, auto-approve edits** or **Keep planning**. Executing switches to that mode and asks the agent to carry out the plan in the same conversation.
+In **Plan** mode the agent writes the plan as numbered tasks (what to do, files, how to check it, how hard it is, what it depends on). When the plan is written a card asks **Execute, ask before edits**, **Execute, auto-approve edits**, **Split across subagents** or **Keep planning**. Executing switches to that mode and asks the agent to carry out the plan in the same conversation.
+
+**Split across subagents** makes the agent the lead: each task goes to its own subagent with a self-contained brief, tasks that do not depend on each other run in parallel, and the lead then reviews the changes together, runs the checks and sums up per task. Edits are auto-approved; commands still ask.
+
+Each task runs on the model that suits it, picked from **your models** (★ in the model list) plus the one in use: the strongest for design or tricky debugging, a faster or cheaper one for search, docs or small edits, each with its own effort. OMP Chat allows exactly those models for subagents (omp's `task.perCallModel`, set for this run only; omp's own settings are not changed), and each subagent card shows the model it runs on. Star at least one model besides the current one to use this; changes to your models apply the next time omp starts (executing a plan restarts it).
 
 A request shows as a card in the chat, for example **Allow tool: edit — File: calc.py** with **Approve / Approve edit for this session / Deny**. Once answered it shrinks to one line. Changing the mode restarts omp and keeps the conversation.
 
