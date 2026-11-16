@@ -2,7 +2,7 @@
   "name": "omp-chat",
   "displayName": "OMP Chat by DT",
   "description": "AI coding chat panel for VS Code, powered by the oh-my-pi (omp) agent and OpenRouter / DeepSeek models.",
-  "version": "0.6.6",
+  "version": "0.6.7",
   "publisher": "dtcode-dev",
   "icon": "media/logo.png",
   "engines": {
@@ -318,6 +318,12 @@
           "type": "boolean",
           "default": true,
           "description": "%config.notifications%"
+        },
+        "ompChat.allowedCommands": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "markdownDescription": "%config.allowedCommands%"
         },
         "ompChat.extraArgs": {
           "type": "array",

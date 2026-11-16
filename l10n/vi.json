@@ -294,6 +294,7 @@
 
     "errors and warnings from the Problems panel": "lỗi và cảnh báo trong tab Problems",
     "recent output of the active terminal": "output gần nhất của terminal đang mở",
+    "uncommitted changes (git status and diff)": "thay đổi chưa commit (git status và diff)",
     "No earlier conversations in this folder yet.": "Thư mục này chưa có cuộc trò chuyện nào trước đó.",
     "No reply: this request failed.": "Không có trả lời: yêu cầu này đã lỗi.",
     "Nothing to export yet.": "Chưa có gì để xuất.",
@@ -328,6 +329,8 @@
     "Older": "Cũ hơn"
   },
   "patterns": [
+    ["^Always allow (.+)$", "Luôn cho phép $1"],
+    ["^Added (.+) to your allowed commands \\(setting ompChat\\.allowedCommands\\)\\.$", "Đã thêm $1 vào danh sách lệnh được tự chạy (cài đặt ompChat.allowedCommands)."],
     ["^Your models · (\\d+)$", "Model của bạn · $1"],
     ["^All models · (\\d+)$", "Tất cả model · $1"],
     ["^Your commands · (\\d+)$", "Lệnh của bạn · $1"],

@@ -146,6 +146,44 @@ function problemLines(entries, max = 60) {
 
 const fence = (title, body) => `[${title}]\n\`\`\`\n${body.replace(/```/g, '``​`')}\n\`\`\``;
 
+// "@https://…": the page as text. HTML loses its scripts, styles and tags; anything else is sent as is.
+async function fetchPage(url, max = 20000) {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'omp-chat', Accept: 'text/html,text/plain,*/*' } });
+    if (!res.ok) return fence(`Web page ${url}`, `Could not fetch it: HTTP ${res.status}.`);
+    const type = res.headers.get('content-type') || '';
+    if (!/text|json|xml|javascript/.test(type)) return fence(`Web page ${url}`, `Not text (${type || 'unknown type'}); not included.`);
+    let body = await res.text();
+    if (/html/.test(type)) {
+      body = body.replace(/<(script|style|noscript|svg|head)\b[\s\S]*?<\/\1>/gi, ' ').replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/<\/(p|div|li|tr|h\d|pre|section|article|br)>|<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
+        .replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim();
+    }
+    return fence(`Web page ${url}`, body.length > max ? `${body.slice(0, max)}\n… (cut at ${max.toLocaleString('en')} characters)` : body);
+  } catch (e) {
+    return fence(`Web page ${url}`, `Could not fetch it: ${e.name === 'TimeoutError' ? 'timed out after 15 s' : e.message}.`);
+  }
+}
+
+// ---- allowed commands (ompChat.allowedCommands): run without asking ----
+// Only omp's plain command prompt matches: one with a "Reason:" line (critical command, restricted folder,
+// a prompt rule of yours) or anything after the command keeps asking. Like omp's own bash.patterns allow
+// rules, a pattern must cover the whole command and never a line with shell control (&&, |, ;, $(…), > …).
+const BASH_ASK = /^Allow tool: bash\nCommand: ([^\n]+)$/;
+const SHELL_CONTROL = /[;&|`$<>(){}\\\r\n]|…/;
+const words = (s) => s.trim().replace(/\s+/g, ' ');
+const globRe = (p) => new RegExp('^' + words(p).split('*').map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$');
+function allowedPattern(command, patterns) {
+  if (SHELL_CONTROL.test(command)) return undefined;
+  return patterns.find((p) => typeof p === 'string' && words(p) && globRe(p).test(words(command)));
+}
+// What "Always allow" offers for a command: its first two words and anything after ("npm test*"), or the word alone.
+function suggestPattern(command) {
+  const w = words(command).split(' ');
+  return w.length > 1 ? `${w[0]} ${w[1]}*` : w[0];
+}
+
 // A conversation (omp's get_messages) as Markdown, for "Export Chat".
 function toMarkdown(messages, model) {
   const out = [`# OMP Chat${model ? ` · ${model}` : ''}`, `_Exported ${new Date().toLocaleString()}_`];
@@ -1711,7 +1749,8 @@ class ChatProvider {
     this.postContext();
   }
 
-  // "@problems" and "@terminal" in a message: what they point at, sent along (not shown in your bubble).
+  // "@problems", "@terminal", "@git" and "@https://…" in a message: what they point at, sent along (not shown in
+  // your bubble). "@file" and "@folder/" are omp's: it reads the file or lists the folder itself.
   async mentions(text) {
     const blocks = [];
     if (/(^|\s)@problems\b/.test(text)) {
@@ -1722,7 +1761,25 @@ class ChatProvider {
       const out = await this.terminalText();
       blocks.push(fence(`Terminal output${out ? `: ${vscode.window.activeTerminal.name}` : ''}`, out || 'No terminal is open.'));
     }
+    if (/(^|\s)@git\b/.test(text)) blocks.push(await this.gitChanges());
+    const urls = [...new Set([...text.matchAll(/(?:^|\s)@(https?:\/\/[^\s<>"']+)/g)].map((m) => m[1].replace(/[),.;:!?\]]+$/, '')))];
+    for (const url of urls.slice(0, 3)) blocks.push(await fetchPage(url));
     return blocks;
+  }
+
+  // "@git": what you have not committed yet, as git status plus the diff against HEAD.
+  async gitChanges() {
+    const cwd = this.cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    try {
+      const status = await git(['status', '--short'], cwd);
+      if (!status) return fence('Uncommitted changes (git)', 'No uncommitted changes.');
+      // ponytail: execFile's 1 MB buffer; a bigger diff falls back to --stat.
+      const diff = await git(['diff', 'HEAD'], cwd).catch(() => git(['diff', 'HEAD', '--stat'], cwd));
+      const body = `${status}\n\n${diff}`;
+      return fence('Uncommitted changes (git status + diff HEAD)', body.length > 40000 ? `${body.slice(0, 40000)}\n… (cut at 40,000 characters)` : body);
+    } catch (e) {
+      return fence('Uncommitted changes (git)', `git failed: ${e.message}`);
+    }
   }
 
   // The active terminal's recent output. VS Code has no API to read a terminal, so this copies it.
@@ -1878,6 +1935,22 @@ class ChatProvider {
       this.post({ type: 'notice', text: `Plan mode: blocked ${r.title.split('\n')[0].replace(/^Allow tool:\s*/, '')}. Approve the plan to let the agent make changes.` });
       return;
     }
+    // A command on your allowed list runs without a card; otherwise the card offers to add it to the list.
+    const bash = r.method === 'select' && BASH_ASK.exec(r.title || '');
+    const once = bash && r.options?.find((o) => /^approve( once)?$/i.test(o));
+    let always;
+    if (once && !SHELL_CONTROL.test(bash[1])) {
+      const cfg = vscode.workspace.getConfiguration('ompChat');
+      const list = cfg.get('allowedCommands', []);
+      if (allowedPattern(bash[1], Array.isArray(list) ? list : [])) {
+        this.client?.send({ type: 'extension_ui_response', id: r.id, value: once });
+        return;
+      }
+      const pattern = suggestPattern(bash[1]);
+      always = { label: `Always allow ${pattern}`, pattern };
+      const at = r.options.indexOf(once) + 1;
+      r = { ...r, options: [...r.options.slice(0, at), always.label, ...r.options.slice(at)] };
+    }
     const client = this.client;
     let cancelled = false;
     let res;
@@ -1922,6 +1995,13 @@ class ChatProvider {
         this.refreshStatus();
         cts.dispose();
       }
+    }
+    if (always && res.value === always.label) {
+      res = { value: once };
+      const cfg = vscode.workspace.getConfiguration('ompChat');
+      const list = cfg.get('allowedCommands', []);
+      await cfg.update('allowedCommands', [...new Set([...(Array.isArray(list) ? list : []), always.pattern])], vscode.ConfigurationTarget.Global);
+      this.post({ type: 'notice', text: `Added ${always.pattern} to your allowed commands (setting ompChat.allowedCommands).` });
     }
     // Skip if omp already gave up on it, or the session was replaced while the dialog was open.
     if (!cancelled && client && this.client === client) client.send({ type: 'extension_ui_response', id: r.id, ...res });

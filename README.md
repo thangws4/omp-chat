@@ -100,6 +100,9 @@ The bar under the box is laid out like Claude Code's: on the left the approval m
 | `@` | Lists workspace files as you type (`@cal…`). **↑ ↓** to move, **Enter** or **Tab** to insert, **Esc** to close. The `@` button does the same |
 | `@problems` | Sends the errors and warnings from VS Code's **Problems** panel with your message |
 | `@terminal` | Sends the recent output of the active terminal (copied through the clipboard, which is put back afterwards) |
+| `@git` | Sends what you have not committed yet: `git status` and the diff against `HEAD` |
+| `@src/` | A folder: omp sends the list of its files. Folders are in the `@` list too |
+| `@https://…` | Fetches the page and sends it as text (up to 3 links per message, 20,000 characters each) |
 | Images | Paste with **Ctrl+V**, drop onto the box, or use the 🖼 button. Up to 5 per message; large images are scaled down. The model must support images |
 | `/` | Lists omp's slash commands, for example `/session`, `/compact`, `/retry`, `/mcp` |
 | `!` | Runs the rest as a shell command in the workspace (the box switches to shell mode). See [Terminal](#terminal) |
@@ -149,6 +152,8 @@ In **Plan** mode the agent writes the plan as numbered tasks (what to do, files,
 Each task runs on the model that suits it, picked from **your models** (★ in the model list) plus the one in use: the strongest for design or tricky debugging, a faster or cheaper one for search, docs or small edits, each with its own effort. OMP Chat allows exactly those models for subagents (omp's `task.perCallModel`, set for this run only; omp's own settings are not changed), and each subagent card shows the model it runs on. Star at least one model besides the current one to use this; changes to your models apply the next time omp starts (executing a plan restarts it).
 
 A request shows as a card in the chat, for example **Allow tool: edit — File: calc.py** with **Approve / Approve edit for this session / Deny**. Once answered it shrinks to one line. Changing the mode restarts omp and keeps the conversation.
+
+**Allowed commands**: commands you trust run without a card, in every mode except Plan. A command's card offers **Always allow** *pattern* (its first two words and anything after, e.g. `npm test*`), which adds the pattern to `ompChat.allowedCommands`; edit that setting to change or remove patterns. A pattern must match the whole command, `*` matching anything. A command with `&&`, `|`, `;`, `$(…)` or `>` always asks, and so does one omp flags as dangerous.
 
 When omp needs a typed answer (a name, a piece of text), the card has a text box; multi-line boxes submit with **Ctrl+Enter**.
 
@@ -308,6 +313,7 @@ Type `/` to see everything available on your machine.
 | `ompChat.notifications` | `true` | Notify when a chat needs you or finishes while you are elsewhere |
 | `ompChat.announceSteps` | `true` | The agent says what it is about to do before it uses tools, gives short updates while it works and sums up at the end, as in Claude Code (added to omp's system prompt; a `--append-system-prompt` in `extraArgs` replaces it) |
 | `ompChat.approvalMode` | `always-ask` | `always-ask`, `always-ask-cached`, `write`, `yolo` or `plan` (the toolbar modes above) |
+| `ompChat.allowedCommands` | `[]` | Commands that run without asking, e.g. `["npm test*", "git status"]`. See [Approvals](#approvals) |
 | `ompChat.ompPath` | `omp` | Path to the omp executable |
 | `ompChat.extraArgs` | `[]` | Extra omp command-line arguments |
 
