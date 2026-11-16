@@ -855,7 +855,8 @@ class ChatProvider {
     let files = [];
     try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => path.join(dir, f)); } catch {}
     const list = files
-      .map((file) => ({ file, mtime: fs.statSync(file).mtimeMs }))
+      .map((file) => { try { return { file, mtime: fs.statSync(file).mtimeMs }; } catch { return null; } }) // deleted meanwhile
+      .filter(Boolean)
       .sort((a, b) => b.mtime - a.mtime)
       .slice(0, 100)
       .map(({ file, mtime }) => {
@@ -868,6 +869,7 @@ class ChatProvider {
   }
 
   async openSession(file) {
+    if (!this.sessionFileOk(file)) return;
     const client = await this.ensureClient();
     this.closeDialogs();
     this.busy = false;
@@ -1935,7 +1937,7 @@ class ChatProvider {
       .map((i) => ({ type: 'image', mimeType: i.mimeType, data: i.data }));
     if (!text && !images.length) return;
     if (!text) text = 'See the attached image.';
-    const client = await this.ensureClient();
+    let client = await this.ensureClient();
     if (!client) { this.post({ type: 'idle' }); return; }
     if (/^!\s*\S/.test(text)) return this.runShell(text.replace(/^!\s*/, ''));
     if (/^#(?!#)\s*\S/.test(text) && !text.includes('\n')) return this.remember(text.replace(/^#\s*/, '')); // one line only
@@ -1959,6 +1961,8 @@ class ChatProvider {
       this.notes = [];
     }
     const shown = { text, context: [ctx?.label, ...pinned].filter(Boolean).map(shortLabel), images: images.map((i) => `data:${i.mimeType};base64,${i.data}`) };
+    // The awaits above (skill list, terminal copy) can outlast a restart: send to the omp running now.
+    client = this.client || await this.ensureClient();
     if (this.busy && !isCommand) {
       // The agent is working: omp holds this until the turn allows it. Shown as "Queued" until delivered.
       const qid = 'q' + ++this.qSeq;

@@ -39,9 +39,11 @@ class OmpClient extends EventEmitter {
         if (!line.trim()) continue;
         let rec;
         try { rec = JSON.parse(line); } catch { this.emit('stderr', line + '\n'); continue; }
-        this.handle(rec);
+        // A bad chunk or a throwing listener must not drop the rest of this read.
+        try { this.handle(rec); } catch (e) { this.emit('stderr', `omp-chat: ${e.stack || e}\n`); }
       }
     });
+    this.proc.stdin.on('error', () => {}); // EPIPE when omp died just before a write; 'exit' reports it
     this.proc.stderr.on('data', (d) => this.emit('stderr', d.toString()));
     this.proc.on('error', (err) => this.onExit({ error: err }));
     this.proc.on('exit', (code, signal) => this.onExit({ code, signal }));
@@ -74,8 +76,9 @@ class OmpClient extends EventEmitter {
     this.emit('exit', info);
   }
 
+  // A stopped or disposed client stays stopped: respawning here would leave an omp nobody tracks or kills.
   send(cmd) {
-    if (!this.proc) this.start();
+    if (!this.proc) return null;
     const id = cmd.id || 'req_' + ++this.seq;
     this.proc.stdin.write(JSON.stringify({ ...cmd, id }) + '\n');
     return id;

@@ -89,8 +89,11 @@ async function replaceLines(doc, b0, b1, lines) {
 const tell = (f, uri, what) => f.owner?.notes?.push(
   `[Note: the user rejected ${what} to ${vscode.workspace.asRelativePath(uri)}; that part is back to its previous content.]`);
 
-async function decide(uri, i, accept) {
-  const doc = await vscode.workspace.openTextDocument(uri), f = files.get(key(uri)), h = hunksOf(doc)[i];
+// `at` (the hunk's first line, from its CodeLens) finds the same hunk even if the file changed since the
+// lens was drawn; the index alone could then point at another change.
+async function decide(uri, i, accept, at) {
+  const doc = await vscode.workspace.openTextDocument(uri), f = files.get(key(uri)), hs = hunksOf(doc);
+  const h = at === undefined ? hs[i] : hs.find((x) => x.b0 === at);
   if (!f || !h) return;
   if (accept) f.base.splice(h.a0, h.a1 - h.a0, ...split(doc.getText()).slice(h.b0, h.b1));
   else { await replaceLines(doc, h.b0, h.b1, f.base.slice(h.a0, h.a1)); tell(f, uri, 'part of your change'); }
@@ -146,13 +149,13 @@ function register(context, translate) {
         if (!hs.length) return [];
         const out = [lens(doc, 0, `$(check-all) ${t('Accept all')} (${hs.length})`, 'ompChat.acceptAll'),
           lens(doc, 0, `$(discard) ${t('Reject all')}`, 'ompChat.rejectAll')];
-        hs.forEach((h, i) => out.push(lens(doc, Math.min(h.b0, last), `$(check) ${t('Accept')}`, 'ompChat.acceptHunk', i),
-          lens(doc, Math.min(h.b0, last), `$(close) ${t('Reject')}`, 'ompChat.rejectHunk', i)));
+        hs.forEach((h, i) => out.push(lens(doc, Math.min(h.b0, last), `$(check) ${t('Accept')}`, 'ompChat.acceptHunk', i, h.b0),
+          lens(doc, Math.min(h.b0, last), `$(close) ${t('Reject')}`, 'ompChat.rejectHunk', i, h.b0)));
         return out;
       },
     }),
-    vscode.commands.registerCommand('ompChat.acceptHunk', (uri, i) => decide(uri, i, true)),
-    vscode.commands.registerCommand('ompChat.rejectHunk', (uri, i) => decide(uri, i, false)),
+    vscode.commands.registerCommand('ompChat.acceptHunk', (uri, i, at) => decide(uri, i, true, at)),
+    vscode.commands.registerCommand('ompChat.rejectHunk', (uri, i, at) => decide(uri, i, false, at)),
     vscode.commands.registerCommand('ompChat.acceptAll', (uri) => decideAll(uri || vscode.window.activeTextEditor?.document.uri, true)),
     vscode.commands.registerCommand('ompChat.rejectAll', (uri) => decideAll(uri || vscode.window.activeTextEditor?.document.uri, false)),
     vscode.workspace.onDidChangeTextDocument((e) => { if (files.has(key(e.document.uri))) refresh(); }),
