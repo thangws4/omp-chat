@@ -4,7 +4,7 @@ An AI coding chat for VS Code, in the spirit of Claude Code and GitHub Copilot C
 
 - Chat panel with Markdown answers, collapsible thinking, and a compact row for every tool the agent runs
 - Asks before it edits files or runs commands, with four approval modes
-- Inline diffs for every changed file, plus **Undo**
+- Inline diffs for every changed file, plus **Undo**; review in the editor with **Accept** / **Reject** per change
 - Sends the open file or your selection with your message; `@` mentions files; paste or drop images
 - `/` commands, a model picker, several API keys per provider, and automatic key switching when a limit is hit
 - Usage and limits: context fill, 5-hour / weekly / monthly plan windows, free-model quota
@@ -157,7 +157,8 @@ When omp needs a typed answer (a name, a piece of text), the card has a text box
 Every tool the agent runs is a compact row (✓ done, ✕ failed); click it to see the output. Edited files are listed under **N files changed** with the number of added and removed lines:
 
 - **Show changes**: the diff inside the chat
-- Diff button (or the file name): VS Code's side-by-side diff
+- File name: opens the file for review in the editor. Added and changed lines are highlighted; a line where something was removed shows "−N removed", and hovering it shows the old text. **Accept** / **Reject** above each change keep it or put it back; **Accept all** / **Reject all** at the top settle the whole file. Rejected parts are saved to disk, and the agent is told with your next message. The review lasts until every change is settled (or VS Code reloads).
+- Diff button: VS Code's side-by-side diff
 - **Undo**: puts the file back as it was before that edit (a file the agent created is deleted). If the file changed again afterwards, OMP Chat asks first. The agent is told about the undo with your next message.
 
 ### Subagents

@@ -434,7 +434,8 @@
         diffBtn.title = 'Open diff';
         diffBtn.appendChild(icon('diff'));
         diffBtn.onclick = () => vscode.postMessage({ type: 'openDiff', id: f.id });
-        name.onclick = diffBtn.onclick;
+        name.title = 'Review in the editor: accept or reject each change';
+        name.onclick = () => vscode.postMessage({ type: 'openEdit', id: f.id });
         const undo = el('button', 'icon');
         undo.title = 'Undo this change';
         undo.dataset.edit = f.id;

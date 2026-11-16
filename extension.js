@@ -8,6 +8,7 @@ const { spawnSync } = require('child_process');
 const { OmpClient } = require('./omp-client');
 const keys = require('./keys');
 const plugins = require('./plugins');
+const review = require('./review');
 const l10n = require('./media/l10n');
 const { PROVIDERS } = keys;
 
@@ -655,6 +656,7 @@ class ChatProvider {
       case 'setMode':
         return vscode.workspace.getConfiguration('ompChat').update('approvalMode', m.mode, vscode.ConfigurationTarget.Global);
       case 'openDiff': return this.openDiff(m.id);
+      case 'openEdit': return this.edits.has(m.id) && vscode.window.showTextDocument(vscode.Uri.file(this.edits.get(m.id).path), { preview: false });
       case 'revert': return this.revert(m.id);
     }
   }
@@ -1638,6 +1640,7 @@ class ChatProvider {
       const canDiff = typeof f.oldText === 'string' && typeof f.newText === 'string';
       const id = canDiff ? String(++this.editSeq) : null;
       if (id) this.edits.set(id, { path: f.path, oldText: f.oldText, newText: f.newText, created: f.op === 'create', turn: this.turnSeq });
+      if (id && !this.replaying) review.track(f.path, f.oldText, f.op === 'create', this);
       return { id, rel: vscode.workspace.asRelativePath(f.path), diff: (f.diff || '').slice(0, 20000) };
     });
   }
@@ -2212,6 +2215,7 @@ function activate(context) {
     statusItem.command = 'ompChat.attention';
     context.subscriptions.push(statusItem);
   }
+  review.register(context, (s) => provider.t(s));
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider('ompChat.view', provider, {
       webviewOptions: { retainContextWhenHidden: true },
