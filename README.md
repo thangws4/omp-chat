@@ -217,12 +217,27 @@ Each task runs on the model that suits it, picked from **your models** (★ in t
 
 ### Changes to your files
 
-Every tool the agent runs is a compact row (✓ done, ✕ failed); click it to see the output. Edited files are listed under **N files changed** with the number of added and removed lines:
+Every tool the agent runs is a compact row (✓ done, ✕ failed); click it to see the output. Edited files are listed under **N files changed** with the number of added and removed lines. Approving an edit shows the lines it will change in the approval card.
 
-- **Show changes**: the diff inside the chat.
-- **File name**: opens the file for review in the editor. Added and changed lines are highlighted; a line where something was removed shows "−N removed", and hovering it shows the old text. **Accept** / **Reject** above each change keep it or put it back; **Accept all** / **Reject all** at the top settle the whole file. Rejected parts are saved to disk, and the agent is told with your next message. The review lasts until every change is settled (or VS Code reloads).
-- **Diff button**: VS Code's side-by-side diff.
+- **A file's row**: opens or closes its diff in the chat (small changes start open).
+- **Review** (📄 button): opens the file for review in the editor, see below.
+- **Diff** button: VS Code's side-by-side diff of that edit.
 - **Undo**: puts the file back as it was before that edit (a file the agent created is deleted). If the file changed again afterwards, OMP Chat asks first. The agent is told about the undo with your next message.
+
+### Reviewing in the editor
+
+A file the agent edits stays under review until you settle every change in it:
+
+- Added and changed lines are highlighted. Where lines were removed, the end of the line shows how many and the first of them (`−3  let sum = 0;  …`); hover it to see them all.
+- **Accept** / **Reject** above each change keep it or put it back; **Accept all** / **Reject all** at the top settle the whole file. **Compare** opens VS Code's diff editor against the file as it was before the agent's edits.
+- The status bar shows how many changes are left (**3 changes to review**); click it to go to the next one.
+- Rejected parts are saved to disk, and the agent is told with your next message. The review lasts until every change is settled (or VS Code reloads).
+
+| Key | While reviewing |
+|---|---|
+| `F7` / `Shift+F7` | Next / previous change, on to the next file under review |
+| `Alt+Y` (`⌘⌥Y`) | Accept the change at the cursor, then go to the next one |
+| `Alt+N` (`⌘⌥N`) | Reject the change at the cursor, then go to the next one |
 
 ### Subagents
 
@@ -411,6 +426,9 @@ Type `/` to see everything available on your machine.
 | OMP Chat: New Chat in Git Worktree… | **…** menu |
 | OMP Chat: Show All Chats | **…** menu, or the tab's title bar |
 | OMP Chat: Go to the Chat That Needs You | Status bar item |
+| OMP Chat: Next / Previous Change to Review | `F7` / `Shift+F7`, or the review status bar item |
+| OMP Chat: Accept / Reject Change at Cursor | `Alt+Y` / `Alt+N`, or the lenses above each change |
+| OMP Chat: Compare with the File Before OMP's Edits | **Compare** lens at the top of a file under review |
 
 | Key | Where | |
 |---|---|---|

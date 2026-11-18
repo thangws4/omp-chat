@@ -32,6 +32,11 @@
   "command.newWorktreeChat": "Chat mới trong git worktree…",
   "command.chats": "Xem tất cả các chat",
   "command.attention": "Đi tới chat đang cần bạn",
+  "command.nextChange": "Thay đổi kế tiếp cần duyệt",
+  "command.prevChange": "Thay đổi trước đó cần duyệt",
+  "command.acceptChange": "Chấp nhận thay đổi tại con trỏ",
+  "command.rejectChange": "Từ chối thay đổi tại con trỏ",
+  "command.compareReview": "So sánh với file trước khi OMP sửa",
   "config.notifications": "Hiện thông báo khi một chat cần bạn trả lời trong lúc chat bị ẩn hoặc VS Code đang ở nền, và khi chat làm xong trong lúc VS Code đang ở nền.",
   "config.allowedCommands": "Các lệnh shell agent được chạy mà không cần hỏi, ở mọi chế độ duyệt trừ Plan. Mỗi mẫu phải khớp cả lệnh; `*` khớp với mọi thứ (`npm test*`, `git status`). Lệnh có `&&`, `|`, `;`, `$(…)` hoặc `>` vẫn phải hỏi, lệnh mà omp coi là nguy hiểm cũng vậy. Nút **Always allow** trên thẻ duyệt lệnh sẽ thêm lệnh vào danh sách này."
 }

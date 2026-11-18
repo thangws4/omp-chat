@@ -75,5 +75,12 @@ const rnd = (n) => Array.from({ length: Math.floor(Math.random() * n) }, () => '
   assert.strictEqual(review.formatDiff('', 'a\nb'), '+1|a\n+2|b'); // a new file is all additions
   assert.strictEqual(review.formatDiff('a\nb\nc', 'a\nX\nc', 0), '-2|b\n+2|X');
   assert.strictEqual(review.formatDiff('same', 'same'), '');
+  // the change under the cursor (a pure deletion counts on the line after it), and what a deletion shows inline
+  const hs = [{ a0: 1, a1: 2, b0: 1, b1: 3 }, { a0: 5, a1: 7, b0: 6, b1: 6 }];
+  assert.deepStrictEqual([0, 1, 2, 3, 5, 6, 7].map((l) => hs.indexOf(review.hunkAt(hs, l))), [-1, 0, 0, -1, -1, 1, -1]);
+  assert.strictEqual(review.removedLabel(['', '  let sum = 0;', 'x']), '−3  let sum = 0;  …');
+  assert.strictEqual(review.removedLabel(['return 1;']), '−1  return 1;');
+  assert.strictEqual(review.removedLabel(['', '  ']), '−2');
+  assert.strictEqual(review.removedLabel(['y'.repeat(80)]), `−1  ${'y'.repeat(60)}…`);
   console.log('review ok');
 })().catch((e) => { console.error(e); process.exit(1); });

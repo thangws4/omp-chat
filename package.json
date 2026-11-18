@@ -2,7 +2,7 @@
   "name": "omp-chat",
   "displayName": "OMP Chat by DT",
   "description": "AI coding agent chat for VS Code, powered by oh-my-pi (omp), with your own keys for OpenCode, OpenRouter, DeepSeek, Anthropic, OpenAI, Gemini and more.",
-  "version": "0.6.9",
+  "version": "0.6.10",
   "publisher": "dtcode-dev",
   "license": "MIT",
   "repository": {
@@ -152,6 +152,37 @@
         "command": "ompChat.attention",
         "title": "%command.attention%",
         "category": "OMP Chat"
+      },
+      {
+        "command": "ompChat.nextChange",
+        "title": "%command.nextChange%",
+        "category": "OMP Chat",
+        "enablement": "ompChat.reviewing"
+      },
+      {
+        "command": "ompChat.prevChange",
+        "title": "%command.prevChange%",
+        "category": "OMP Chat",
+        "enablement": "ompChat.reviewing"
+      },
+      {
+        "command": "ompChat.acceptChange",
+        "title": "%command.acceptChange%",
+        "category": "OMP Chat",
+        "enablement": "ompChat.inChange"
+      },
+      {
+        "command": "ompChat.rejectChange",
+        "title": "%command.rejectChange%",
+        "category": "OMP Chat",
+        "enablement": "ompChat.inChange"
+      },
+      {
+        "command": "ompChat.compareReview",
+        "title": "%command.compareReview%",
+        "category": "OMP Chat",
+        "icon": "$(diff)",
+        "enablement": "ompChat.reviewing"
       }
     ],
     "menus": {
@@ -355,6 +386,28 @@
         "key": "ctrl+alt+a",
         "mac": "cmd+alt+a",
         "when": "editorTextFocus"
+      },
+      {
+        "command": "ompChat.nextChange",
+        "key": "f7",
+        "when": "ompChat.reviewing && editorTextFocus && !isInDiffEditor"
+      },
+      {
+        "command": "ompChat.prevChange",
+        "key": "shift+f7",
+        "when": "ompChat.reviewing && editorTextFocus && !isInDiffEditor"
+      },
+      {
+        "command": "ompChat.acceptChange",
+        "key": "alt+y",
+        "mac": "cmd+alt+y",
+        "when": "ompChat.inChange && editorTextFocus"
+      },
+      {
+        "command": "ompChat.rejectChange",
+        "key": "alt+n",
+        "mac": "cmd+alt+n",
+        "when": "ompChat.inChange && editorTextFocus"
       }
     ]
   },
