@@ -850,6 +850,8 @@ class ChatProvider {
       this.post({ type: 'todos', phases: s.todoPhases || [] });
       this.sessionFile = s.sessionFile;
       this.postSession();
+      // The start screen offers the latest other conversations to pick up again.
+      if (s.sessionFile) this.post({ type: 'recent', list: this.listSessions(s.sessionFile, 4).filter((x) => !x.current).slice(0, 3) });
       if (s.sessionFile && !this.tab) await this.context.workspaceState.update(LAST_SESSION, s.sessionFile);
       this.refreshMeter();
       return s;
@@ -934,21 +936,26 @@ class ChatProvider {
     const client = await this.ensureClient();
     const state = await this.track(client);
     if (!state?.sessionFile) return;
-    const dir = this.sessionDir = path.dirname(state.sessionFile);
+    const list = this.listSessions(state.sessionFile, 100);
+    if (!list.length) return this.post({ type: 'notice', text: 'No earlier conversations in this folder yet.' });
+    this.post({ type: 'sessions', list });
+  }
+
+  // Conversations saved next to `current` (omp keeps one folder per workspace), newest first.
+  listSessions(current, max) {
+    const dir = this.sessionDir = path.dirname(current);
     let files = [];
     try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => path.join(dir, f)); } catch {}
-    const list = files
+    return files
       .map((file) => { try { return { file, mtime: fs.statSync(file).mtimeMs }; } catch { return null; } }) // deleted meanwhile
       .filter(Boolean)
       .sort((a, b) => b.mtime - a.mtime)
-      .slice(0, 100)
+      .slice(0, max)
       .map(({ file, mtime }) => {
         const s = sessionSummary(file);
-        return s && { file, title: s.title, when: mtime, current: path.resolve(file) === path.resolve(state.sessionFile) };
+        return s && { file, title: s.title, when: mtime, current: path.resolve(file) === path.resolve(current) };
       })
       .filter(Boolean);
-    if (!list.length) return this.post({ type: 'notice', text: 'No earlier conversations in this folder yet.' });
-    this.post({ type: 'sessions', list });
   }
 
   async openSession(file) {
@@ -2221,13 +2228,18 @@ class ChatProvider {
   <div id="welcome">
     <div class="hero">${mascot}</div>
     <h2>OMP Chat</h2>
-    <p>${t('Ask about your code, or let the agent change it.')}<br>${t('It asks before editing files or running commands.')}</p>
+    <p class="lead">${t('Ask about your code, or let the agent change it.')}<br>${t('It asks before editing files or running commands.')}</p>
     <div id="suggest">
-      <button class="chip" data-prompt="Explain what the current file does."><span class="codicon codicon-book"></span>Explain this file</button>
-      <button class="chip" data-prompt="Find bugs in the current file and fix them."><span class="codicon codicon-bug"></span>Find and fix bugs</button>
-      <button class="chip" data-prompt="Write unit tests for the current file."><span class="codicon codicon-beaker"></span>Write tests</button>
+      <button class="card" data-prompt="Explain what the current file does."><span class="codicon codicon-book"></span><span class="ctext"><b>Explain this file</b><small>What it does and how the parts fit</small></span></button>
+      <button class="card" data-prompt="Find bugs in the current file and fix them."><span class="codicon codicon-bug"></span><span class="ctext"><b>Find and fix bugs</b><small>Look for mistakes in the open file</small></span></button>
+      <button class="card" data-prompt="Write unit tests for the current file."><span class="codicon codicon-beaker"></span><span class="ctext"><b>Write tests</b><small>Cover the open file with unit tests</small></span></button>
     </div>
-    <p class="hint">${t('Type <kbd>/</kbd> for commands · <kbd>@</kbd> to mention a file · <kbd>!</kbd> to run a shell command · paste or drop images')}<br>${t('<kbd>Shift+Tab</kbd> switches approval mode · <kbd>Esc</kbd> stops the agent')}</p>
+    <div id="recent" hidden></div>
+    <div class="keys">
+      <span><kbd>/</kbd>Commands</span><span><kbd>@</kbd>Mention a file</span>
+      <span><kbd>!</kbd>Shell command</span><span><kbd>#</kbd>Save to memory</span>
+      <span><kbd>Shift+Tab</kbd>Approval mode</span><span><kbd>Esc</kbd>Stop the agent</span>
+    </div>
   </div>
 </div>
 <div id="composer">

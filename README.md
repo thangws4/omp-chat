@@ -165,7 +165,7 @@ The bar under the box is laid out like Claude Code's: on the left the approval m
 | `#` | Saves the rest of the line to the project's memory (`AGENTS.md`) instead of sending it. See [Memory](#memory) |
 | ↑ / ↓ in an empty box | Brings back the messages you sent before, like a shell. What you are typing is kept if the window reloads |
 
-The suggestions on the start screen (**Explain this file**, **Find and fix bugs**, **Write tests**) send a ready-made request about the open file.
+The start screen offers ready-made requests about the open file (**Explain this file**, **Find and fix bugs**, **Write tests**), your three latest conversations under **Recent** (one click picks one up again; **All chats** lists the rest), and the main shortcuts.
 
 In replies, a file path such as `src/app.ts:42` is a link that opens the file at that line. Code blocks have **Insert at cursor** (into the editor you were last in), **Open in new file** and **Copy**.
 

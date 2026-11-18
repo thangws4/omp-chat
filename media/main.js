@@ -1596,7 +1596,26 @@
     input.setSelectionRange(p + lead.length, p + lead.length);
     updateInlinePicker();
   };
-  for (const chip of document.querySelectorAll('#suggest .chip')) chip.onclick = () => send(chip.dataset.prompt);
+  for (const card of document.querySelectorAll('#suggest .card')) card.onclick = () => send(card.dataset.prompt);
+  // The start screen's latest conversations, one click to pick each up again.
+  function showRecent(list) {
+    const box = $('recent');
+    box.textContent = '';
+    box.hidden = !list?.length;
+    if (box.hidden) return;
+    const head = el('div', 'wsh');
+    const all = el('button', 'wall', 'All chats');
+    all.onclick = () => vscode.postMessage({ type: 'history' });
+    head.append(el('span', '', 'Recent'), all);
+    box.appendChild(head);
+    for (const x of list) {
+      const b = el('button', 'rrow');
+      b.title = x.title;
+      b.append(icon('comment-discussion'), el('span', 'rtitle', x.title), el('span', 'rwhen', ago(x.when)));
+      b.onclick = () => vscode.postMessage({ type: 'openSession', file: x.file });
+      box.appendChild(b);
+    }
+  }
 
   // Images: attach button, paste into the message box, or drop anywhere on the composer.
   $('addImage').onclick = () => $('imageFile').click();
@@ -1893,6 +1912,7 @@
       case 'todos': showTodos(m.phases || []); break;
       case 'planReady': showPlanReady(); break;
       case 'sessions': showSessions(m); break;
+      case 'recent': showRecent(m.list); break;
       case 'form': showForm(m); break;
       case 'keys': showKeys(m); break;
       case 'plugins': showPlugins(m); break;
