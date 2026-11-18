@@ -457,7 +457,14 @@ textarea.cinput { font-family: var(--vscode-editor-font-family); }
 #ctx .chip .codicon { font-size: 13px; flex: none; }
 #ctx .addctx { border-style: dashed; color: var(--vscode-descriptionForeground); background: transparent; }
 #ctx .addctx:hover { color: var(--vscode-foreground); border-style: solid; }
-#pinned { display: contents; }
+#pinned, #attached { display: contents; }
+.attchip .plabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attchip .asize { flex: none; font-size: .9em; color: var(--vscode-descriptionForeground); }
+.attchip > .codicon-file-pdf { color: var(--vscode-charts-red, #e5534b); }
+/* while files are dragged over the panel */
+#dropHint { display: none; align-items: center; gap: 6px; padding: 8px 11px 0; font-size: .9em; color: var(--vscode-textLink-foreground); }
+#box.drop #dropHint { display: flex; }
+#box.drop { background: var(--vscode-list-dropBackground, var(--vscode-input-background)); }
 .pinchip .plabel, #ctxLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pinchip > .codicon-pinned { color: var(--vscode-textLink-foreground); }
 .tfoot { display: flex; align-items: center; gap: 8px; margin: 2px 0 0 22px; color: var(--vscode-descriptionForeground); font-size: .85em; opacity: .75; }
@@ -524,7 +531,7 @@ button.send .codicon { font-size: 14px; }
   box-shadow: 0 2px 8px var(--vscode-widget-shadow, rgba(0,0,0,.3));
 }
 #popup .item { display: flex; align-items: center; gap: 8px; padding: 3px 8px; cursor: pointer; white-space: nowrap; }
-#popup.picker-model, #popup.picker-history { max-height: 340px; display: flex; flex-direction: column; overflow: hidden; }
+#popup.picker-model, #popup.picker-history { max-height: 400px; display: flex; flex-direction: column; overflow: hidden; }
 /* history opens from the title bar, so it drops down from the top instead of rising from the composer */
 #popup.picker-history { position: fixed; top: 6px; bottom: auto; z-index: 10; }
 #popup .plist { overflow-y: auto; }
@@ -536,6 +543,19 @@ button.send .codicon { font-size: 14px; }
 #popup .pempty { padding: 6px 8px; color: var(--vscode-descriptionForeground); }
 #popup.picker-history .pname, #popup.picker-file .pname { font-family: inherit; }
 #popup .item.active { background: var(--vscode-editorSuggestWidget-selectedBackground); color: var(--vscode-editorSuggestWidget-selectedForeground); }
+/* two-line rows (models): the name, and a muted line with the provider, context, images and price */
+#popup .item.two { align-items: center; padding: 5px 8px; }
+#popup .ptext { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+#popup .item.two .pname { font-family: inherit; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+#popup .psub { font-size: .85em; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; }
+#popup .item.active .psub { color: inherit; opacity: .8; }
+#popup .item.two .pbadge { margin-left: 6px; }
+#popup.picker-model .item > .codicon-check { color: var(--vscode-testing-iconPassed, #3a3); }
+#popup .item.active > .codicon-check { color: inherit; }
+/* the way to all models, set apart from the list */
+#popup .item.pfoot { flex: none; border-top: 1px solid var(--vscode-editorSuggestWidget-border, var(--vscode-widget-border)); margin-top: 2px; padding: 6px 8px;
+  color: var(--vscode-textLink-foreground); }
+#popup .item.pfoot .pname { font-family: inherit; }
 #popup .pname { font-family: var(--vscode-editor-font-family); }
 #popup .pdesc { color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; }
 #popup .item.active .pdesc { color: inherit; opacity: .8; }

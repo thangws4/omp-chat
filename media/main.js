@@ -236,8 +236,11 @@
 
   function send(text) {
     text = (text ?? input.value).trim();
-    if (!text && !pending.length) return;
+    if (!text && !pending.length && !attached.length) return;
     const images = pending.map(({ mimeType, data }) => ({ mimeType, data }));
+    const files = attached.map(({ name, mimeType, data, path }) => ({ name, mimeType, data, path }));
+    attached = [];
+    renderAttached();
     if (text) sent = [...sent.filter((x) => x !== text), text].slice(-50);
     histAt = -1;
     saveState({ sent, draft: '' });
@@ -247,7 +250,7 @@
     renderThumbs();
     autosize();
     hidePicker();
-    vscode.postMessage({ type: 'send', text, withContext: useContext && !!contextLabel, images });
+    vscode.postMessage({ type: 'send', text, withContext: useContext && !!contextLabel, images, files });
   }
 
   // ---- images: paste, drop or attach; large ones are scaled down before sending ----
@@ -281,6 +284,52 @@
       if (img) pending.push(img);
     }
     renderThumbs();
+  }
+
+  // ---- other files (PDF, Word, Excel, text, code…): the agent reads them with its read tool ----
+  // { name, size, mimeType, data } from disk or the clipboard, or { name, path, label } dragged from VS Code.
+  let attached = [];
+  const MAX_FILES = 10, MAX_FILE = 20e6;
+  const IMAGE = /^image\/(png|jpeg|gif|webp)$/;
+  const say = (text) => window.postMessage({ type: 'notice', text }, '*');
+  const readBase64 = (f) => new Promise((resolve) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(',')[1] || '');
+    r.onerror = () => resolve(null);
+    r.readAsDataURL(f);
+  });
+  async function addFiles(list) {
+    list = [...list];
+    const imgs = list.filter((f) => IMAGE.test(f.type));
+    if (imgs.length) await addImages(imgs);
+    for (const f of list.filter((x) => !IMAGE.test(x.type))) {
+      if (attached.length >= MAX_FILES) { say(`At most ${MAX_FILES} files per message.`); break; }
+      if (/\.(doc|xls|ppt)$/i.test(f.name)) { say(`${f.name}: OMP cannot read old Office files. Save it as .docx, .xlsx, .pptx or PDF and attach that.`); continue; }
+      if (f.size > MAX_FILE) { say(`${f.name} is larger than 20 MB, so it was not attached.`); continue; }
+      const data = await readBase64(f);
+      if (data !== null) attached.push({ name: f.name, size: f.size, mimeType: f.type, data });
+    }
+    renderAttached();
+  }
+  const fileIcon = (name) => (/\.pdf$/i.test(name) ? 'file-pdf' : /\.(zip|tar|gz|7z|rar)$/i.test(name) ? 'file-zip'
+    : /\.(docx|xlsx|pptx|epub|md|txt|csv|rtf)$/i.test(name) ? 'file-text' : /\.\w+$/.test(name) ? 'file-code' : 'folder');
+  const size = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`);
+  function renderAttached() {
+    syncSendStop();
+    const box = $('attached');
+    box.textContent = '';
+    attached.forEach((a, i) => {
+      const c = el('span', 'chip attchip');
+      c.title = a.path || `${a.name} (${size(a.size)})`;
+      const x = el('button', 'ctxx');
+      x.title = 'Remove';
+      x.appendChild(icon('close'));
+      x.onclick = () => { attached.splice(i, 1); renderAttached(); };
+      c.append(icon(fileIcon(a.name)), el('span', 'plabel', a.label || a.name));
+      if (a.size) c.appendChild(el('span', 'asize', size(a.size)));
+      c.appendChild(x);
+      box.appendChild(c);
+    });
   }
   function renderThumbs() {
     syncSendStop();
@@ -883,7 +932,7 @@
       if (!inFav) r.appendChild(btn(starred ? 'star-full' : 'star-empty', starred ? 'Remove from your models' : 'Add to your models', () => toggle(x.id), false, 'mstar' + (starred ? ' on' : '')));
       else r.appendChild(icon(x.id === m.current ? 'check' : 'star-full'));
       const text = el('div', 'mtext');
-      text.append(el('div', 'mname', x.name || x.id.split('/').slice(1).join('/')), el('div', 'mid', x.id));
+      text.append(el('div', 'mname', x.name || x.id.split('/').slice(1).join('/')), el('div', 'mid', [x.id, modelMeta(x)].filter(Boolean).join(' · ')));
       r.appendChild(text);
       const badge = modelBadge(x);
       if (badge) r.appendChild(el('span', 'pbadge', badge));
@@ -1283,7 +1332,7 @@
     const k = it.key.toLowerCase(), s = (it.short || '').toLowerCase();
     if (k.startsWith(q) || s.startsWith(q)) return 0;
     if (k.includes(q)) return 1;
-    return (it.desc || '').toLowerCase().includes(q) ? 2 : -1;
+    return (it.desc || '').toLowerCase().includes(q) || (it.sub && it.label.toLowerCase().includes(q)) ? 2 : -1;
   }
   function openPicker(kind, all, choose, query) {
     // Lists you open from a button replace an open sheet; the @ and / lists while you type leave it alone.
@@ -1322,17 +1371,24 @@
       popup.appendChild(head);
       if (pk.kind === 'model') popup.appendChild(effortRow());
     }
-    const list = el('div', 'plist');
+    const list = el('div', 'plist'), foot = document.createDocumentFragment();
     list.setAttribute('role', 'listbox');
     const grouped = !pk.filter?.value; // filtered results are ranked, not in date order
     pk.items.forEach((it, i) => {
       if (grouped && it.group && it.group !== pk.items[i - 1]?.group) list.appendChild(el('div', 'pgroup', it.group));
-      const row = el('div', 'item' + (i === pk.active ? ' active' : ''));
+      const row = el('div', 'item' + (i === pk.active ? ' active' : '') + (it.sub ? ' two' : '') + (it.cls ? ' ' + it.cls : ''));
       row.setAttribute('role', 'option');
       row.setAttribute('aria-selected', String(i === pk.active));
+      if (it.tip) row.title = it.tip;
       if (it.icon) row.appendChild(icon(it.icon));
-      row.appendChild(el('span', 'pname', it.label));
-      if (it.desc) row.appendChild(el('span', 'pdesc', it.desc));
+      if (it.sub) { // name over a muted detail line
+        const text = el('span', 'ptext');
+        text.append(el('span', 'pname', it.label), el('span', 'psub', it.sub));
+        row.appendChild(text);
+      } else {
+        row.appendChild(el('span', 'pname', it.label));
+        if (it.desc) row.appendChild(el('span', 'pdesc', it.desc));
+      }
       if (it.badge) row.appendChild(el('span', 'pbadge', it.badge));
       if (it.star !== undefined) { // ☆ pins a model to "your models" without choosing it
         const star = el('button', 'icon pstar' + (it.star ? ' on' : ''));
@@ -1356,10 +1412,10 @@
         row.appendChild(b);
       }
       row.onmousedown = (e) => { e.preventDefault(); choosePicked(i); };
-      list.appendChild(row);
+      (it.cls === 'pfoot' ? foot : list).appendChild(row); // a footer row stays in view below the scrolling list
     });
     if (!pk.items.length) list.appendChild(el('div', 'pempty', 'No match'));
-    popup.appendChild(list);
+    popup.append(list, foot);
     popup.hidden = false;
     list.querySelector('.active')?.scrollIntoView({ block: 'nearest' });
     if (ownFilter(pk) && document.activeElement !== pk.filter) pk.filter.focus();
@@ -1445,14 +1501,23 @@
     openPicker('history', all, (it) => vscode.postMessage({ type: 'openSession', file: it.file }));
   }
   const modelBadge = (x) => (x.usedUp ? `used up · ${x.usedUp}` : x.plan ? 'Go plan' : x.free ? 'free' : '');
+  // "1M ctx · images · $2 / $10": what tells models apart when picking one (price per 1M tokens in / out).
+  const tokens = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1e3)}K`);
+  const price = (n) => `$${n >= 10 ? Math.round(n) : +n.toFixed(2)}`;
+  const modelMeta = (x) => [
+    x.contextWindow ? `${tokens(x.contextWindow)} ctx` : '',
+    x.vision ? 'images' : '',
+    x.cost ? `${price(x.cost.input)} / ${price(x.cost.output)}` : '',
+  ].filter(Boolean).join(' · ');
   // The chat's picker: only your models (plus the one in use), and a way to the full list.
   function showModels(m) {
     const mine = m.list.filter((x) => x.favorite || x.id === m.current).map((x) => ({
-      key: x.id, short: x.id.split('/').slice(1).join('/'), label: x.name || x.id, icon: x.id === m.current ? 'check' : 'star-full',
-      desc: x.id, badge: modelBadge(x),
+      key: x.id, short: x.id.split('/').slice(1).join('/'), label: x.name || x.id, icon: x.id === m.current ? 'check' : 'blank',
+      sub: [x.id.split('/')[0], modelMeta(x)].filter(Boolean).join(' · '), desc: x.id, badge: modelBadge(x),
+      tip: `${x.id}${x.cost ? '\nPrice per 1M tokens: input / output' : ''}`,
     }));
-    const manage = { key: '\u0000manage', label: 'Manage models…', icon: 'settings-gear',
-      desc: mine.some((x) => x.icon === 'star-full') ? 'all models, add or reorder yours' : 'pick your models from the full list' };
+    const manage = { key: '\u0000manage', label: 'Manage models…', icon: 'settings-gear', cls: 'pfoot',
+      desc: mine.length > 1 ? 'all models, add or reorder yours' : 'pick your models from the full list' };
     pk = null;
     openPicker('model', [...mine, manage], (it) => (it === manage
       ? vscode.postMessage({ type: 'manageModels' })
@@ -1467,7 +1532,7 @@
   }
   // One spot, like Claude Code: Stop while the agent works, Send (queue) once you type something.
   function syncSendStop() {
-    const stop = busy && !input.value.trim() && !pending.length;
+    const stop = busy && !input.value.trim() && !pending.length && !attached.length;
     stopBtn.hidden = !stop;
     sendBtn.hidden = stop;
   }
@@ -1617,20 +1682,31 @@
     }
   }
 
-  // Images: attach button, paste into the message box, or drop anywhere on the composer.
+  // Files and images: the + button, paste into the message box, or drop anywhere on the panel.
   $('addImage').onclick = () => $('imageFile').click();
-  $('imageFile').onchange = (e) => { addImages(e.target.files); e.target.value = ''; };
+  $('imageFile').onchange = (e) => { addFiles(e.target.files); e.target.value = ''; };
   input.addEventListener('paste', (e) => {
-    const imgs = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
-    if (imgs.length) { e.preventDefault(); addImages(imgs); }
+    const list = [...(e.clipboardData?.files || [])];
+    if (list.length) { e.preventDefault(); addFiles(list); }
   });
+  // Files from the OS arrive as File objects; files dragged from VS Code's Explorer or tabs only as URIs,
+  // which the extension turns into paths.
   const box = $('box');
-  box.addEventListener('dragover', (e) => { e.preventDefault(); box.classList.add('drop'); });
-  box.addEventListener('dragleave', () => box.classList.remove('drop'));
-  box.addEventListener('drop', (e) => {
+  const dropUris = (dt) => (dt.getData('application/vnd.code.uri-list') || dt.getData('text/uri-list') || '')
+    .split(/\r?\n/).map((s) => s.trim()).filter((s) => /^file:/i.test(s));
+  let drags = 0; // dragenter / dragleave also fire for every child crossed
+  const dropOff = () => { drags = 0; box.classList.remove('drop'); };
+  document.addEventListener('dragenter', (e) => { e.preventDefault(); drags++; box.classList.add('drop'); });
+  document.addEventListener('dragover', (e) => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; });
+  document.addEventListener('dragleave', () => { if (--drags <= 0) dropOff(); });
+  document.addEventListener('drop', (e) => {
     e.preventDefault();
-    box.classList.remove('drop');
-    addImages([...(e.dataTransfer?.files || [])].filter((f) => f.type.startsWith('image/')));
+    dropOff();
+    const dt = e.dataTransfer;
+    if (!dt) return;
+    if (dt.files?.length) addFiles(dt.files);
+    else if (dropUris(dt).length) vscode.postMessage({ type: 'dropUris', uris: dropUris(dt) });
+    input.focus();
   });
 
   // Claude Code keys: Shift+Tab cycles the approval mode, Esc stops the agent.
@@ -1913,6 +1989,10 @@
       case 'planReady': showPlanReady(); break;
       case 'sessions': showSessions(m); break;
       case 'recent': showRecent(m.list); break;
+      case 'attachPaths': // files dragged from VS Code, as paths the agent can read
+        for (const p of m.list || []) if (attached.length < MAX_FILES && !attached.some((a) => a.path === p.path)) attached.push(p);
+        renderAttached();
+        break;
       case 'form': showForm(m); break;
       case 'keys': showKeys(m); break;
       case 'plugins': showPlugins(m); break;

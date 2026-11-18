@@ -147,7 +147,7 @@ A message sent while the agent is working is **queued**: it waits above the box,
 
 When the agent keeps a to-do list, it is pinned above the box (**Todos 2/5**): ✓ done, ⟳ in progress, ○ to do. Click the header to fold it.
 
-What goes with your message sits in a row at the top of the box: **Add context** (`@`), the open file and any pinned files. The bar under the text has the approval mode on the left; on the right the context ring (with a percentage once it is half full), the model with its effort (`deepseek-v4-flash · high`), `/` for commands, images, and send. In a narrow sidebar the labels fold into icons; their tooltips still say everything.
+What goes with your message sits in a row at the top of the box: **Add context** (`@`), the open file and any pinned files. The bar under the text has the approval mode on the left; on the right the context ring (with a percentage once it is half full), the model with its effort (`deepseek-v4-flash · high`), `/` for commands, **+** to attach files or images, and send. In a narrow sidebar the labels fold into icons; their tooltips still say everything.
 
 | In the message box | What it does |
 |---|---|
@@ -159,7 +159,7 @@ What goes with your message sits in a row at the top of the box: **Add context**
 | `@git` | Sends what you have not committed yet: `git status` and the diff against `HEAD` |
 | `@src/` | A folder: omp sends the list of its files. Folders are in the `@` list too |
 | `@https://…` | Fetches the page and sends it as text (up to 3 links per message, 20,000 characters each) |
-| Images | Paste with **Ctrl+V**, drop onto the box, or use the 🖼 button. Up to 5 per message; large images are scaled down. The model must support images |
+| Images and files | Use the **+** button, paste with **Ctrl+V**, or drag them anywhere onto the panel (from your file manager, or from VS Code's Explorer and tabs; hold **Shift** while dropping if VS Code opens the file instead). Images (up to 5, large ones scaled down) go to the model directly, so it must support images. Other files (up to 10, 20 MB each) show as chips and the agent reads them: PDF, Word (.docx), Excel (.xlsx), PowerPoint (.pptx), EPUB, text and code. Old .doc / .xls / .ppt files cannot be read; save them in the newer format first |
 | `/` | Lists omp's slash commands, for example `/session`, `/compact`, `/retry`, `/mcp` |
 | `!` | Runs the rest as a shell command in the workspace (the box switches to shell mode). See [Terminal](#terminal) |
 | `#` | Saves the rest of the line to the project's memory (`AGENTS.md`) instead of sending it. See [Memory](#memory) |
@@ -256,7 +256,7 @@ omp can hand parts of a job to **subagents** (its `task` tool): helpers with the
 
 ### Models
 
-Click the model name in the toolbar to open the model list. Type to filter (`free`, `deepseek`, `kimi`…). Badges say **free**, **Go plan** (needs the OpenCode Go subscription) or **used up** (free allowance spent, with the time until it resets).
+Click the model name in the toolbar to open the model list. Each model shows its name, and under it the provider, context window, whether it reads images, and the price per million tokens in / out (for example `anthropic · 1M ctx · images · $2 / $10`). Type to filter by name or id (`free`, `deepseek`, `kimi`…). Badges say **free**, **Go plan** (needs the OpenCode Go subscription) or **used up** (free allowance spent, with the time until it resets). **Manage models…** stays at the bottom.
 
 The **Effort** row sets how much the model thinks before answering: `low`, `medium`, `high` (the default) or `max`, as in Claude Code. The choice shows after the model name and applies to the running conversation. Models without reasoning ignore it.
 

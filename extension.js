@@ -291,6 +291,14 @@ const textOf = (content) => (typeof content === 'string' ? content
   : (content || []).filter((p) => p.type === 'text').map((p) => p.text).join('\n'));
 
 // Title + first user line of a session file, read from its head only (sessions can be large).
+// file:// URIs dragged into the panel from VS Code's Explorer or tabs -> paths the agent can read.
+function droppedPaths(uris) {
+  return (Array.isArray(uris) ? uris : []).slice(0, 10)
+    .map((u) => { try { return vscode.Uri.parse(String(u)); } catch { return null; } })
+    .filter((u) => u?.scheme === 'file' && fs.existsSync(u.fsPath))
+    .map((u) => ({ path: u.fsPath, name: path.basename(u.fsPath), label: vscode.workspace.asRelativePath(u) }));
+}
+
 function sessionSummary(file) {
   let head = '';
   try {
@@ -658,7 +666,8 @@ class ChatProvider {
   async onWebviewMessage(m) {
     switch (m.type) {
       case 'ready': this.markReady(); return this.sync();
-      case 'send': return this.send(m.text, m.withContext, m.images);
+      case 'send': return this.send(m.text, m.withContext, m.images, [], m.files);
+      case 'dropUris': return this.post({ type: 'attachPaths', list: droppedPaths(m.uris) });
       case 'stop': return this.stop();
       case 'new': return this.newSession();
       case 'dialogAnswer': return this.dialogs.get(m.id)?.answer?.(m.value);
@@ -1934,7 +1943,10 @@ class ChatProvider {
     const order = (id) => (fav.includes(id) ? fav.indexOf(id) : recent.indexOf(id));
     const list = models.map((m) => {
       const id = `${m.provider}/${m.id}`;
-      return { id, name: m.name || '', free: free(id), plan: plan(id), usedUp: usedUp(id), favorite: fav.includes(id), recent: !fav.includes(id) && recent.includes(id) };
+      return { id, name: m.name || '', free: free(id), plan: plan(id), usedUp: usedUp(id), favorite: fav.includes(id), recent: !fav.includes(id) && recent.includes(id),
+        // what helps pick one: context window, whether it sees images, price per 1M tokens in / out
+        contextWindow: m.contextWindow || 0, vision: Array.isArray(m.input) && m.input.includes('image'),
+        cost: m.cost && (m.cost.input || m.cost.output) ? { input: m.cost.input, output: m.cost.output } : null };
     }).sort((a, b) => tier(a.id) - tier(b.id) || (tier(a.id) < 2 ? order(a.id) - order(b.id) : 0)
       || !!a.usedUp - !!b.usedUp || (b.id === cur) - (a.id === cur) || b.free - a.free || a.id.localeCompare(b.id));
     this.modelsCache = list;
@@ -2076,15 +2088,44 @@ class ChatProvider {
   }
 
   // extra: blocks sent to the model ahead of your text but not shown in your bubble (problems, terminal output).
-  async send(text, withContext, images, extra = []) {
+  // Files from the panel: [{ name, data (base64) }] uploads, or [{ path }] dragged from VS Code. Uploads are
+  // written under the extension's storage, one folder per message. Returns [{ path, label }].
+  // ponytail: uploads are kept (a resumed conversation may read them again); prune old folders if they pile up.
+  saveAttachments(files) {
+    const out = [];
+    let dir = null;
+    for (const f of (Array.isArray(files) ? files : []).slice(0, 10)) {
+      if (typeof f?.path === 'string') {
+        if (fs.existsSync(f.path)) out.push({ path: f.path, label: vscode.workspace.asRelativePath(f.path) });
+        continue;
+      }
+      if (typeof f?.data !== 'string' || f.data.length > 28e6) continue; // about 20 MB once decoded
+      const name = path.basename(String(f.name || 'file')).replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') || 'file';
+      try {
+        dir ??= path.join(this.context.globalStorageUri.fsPath, 'attachments', String(Date.now()));
+        fs.mkdirSync(dir, { recursive: true });
+        let file = path.join(dir, name);
+        for (let n = 2; fs.existsSync(file); n++) file = path.join(dir, `${path.parse(name).name} (${n})${path.extname(name)}`);
+        fs.writeFileSync(file, Buffer.from(f.data, 'base64'));
+        out.push({ path: file, label: name });
+      } catch (e) {
+        this.post({ type: 'error', text: `Could not attach ${name}: ${e.message}` });
+      }
+    }
+    return out;
+  }
+
+  async send(text, withContext, images, extra = [], files = []) {
     text = (text || '').trim();
     // Pasted / attached images from the webview: [{ mimeType, data (base64) }], at most 5 per message.
     images = (Array.isArray(images) ? images : [])
       .filter((i) => /^image\/(png|jpeg|gif|webp)$/.test(i?.mimeType) && typeof i.data === 'string')
       .slice(0, 5)
       .map((i) => ({ type: 'image', mimeType: i.mimeType, data: i.data }));
-    if (!text && !images.length) return;
-    if (!text) text = 'See the attached image.';
+    // Other files: uploads are saved where omp can read them; files dragged from VS Code are used where they are.
+    const attachments = this.saveAttachments(files);
+    if (!text && !images.length && !attachments.length) return;
+    if (!text) text = attachments.length ? `See the attached file${attachments.length > 1 ? 's' : ''}.` : 'See the attached image.';
     let client = await this.ensureClient();
     if (!client) { this.post({ type: 'idle' }); return; }
     if (/^!\s*\S/.test(text)) return this.runShell(text.replace(/^!\s*/, ''));
@@ -2095,6 +2136,10 @@ class ChatProvider {
     const blocks = isCommand ? [] : [...extra, ...await this.mentions(text)];
     let message = [...blocks, text].join('\n\n');
     if (pinned.length) message = `[Attached files: ${pinned.join(', ')}]\n\n${message}`;
+    if (attachments.length && !isCommand) {
+      message = `[Files the user attached; read them with the read tool, which also converts PDF, Word, Excel, PowerPoint and EPUB:\n${
+        attachments.map((a) => `- ${a.path}`).join('\n')}]\n\n${message}`;
+    }
     if (ctx) {
       const head = ctx.text ? `[Selection from ${ctx.label}]\n\`\`\`${ctx.lang}\n${ctx.text.slice(0, 20000)}\n\`\`\`` : `[Current file: ${ctx.rel}]`;
       message = `${head}\n\n${message}`;
@@ -2108,7 +2153,8 @@ class ChatProvider {
       message = `${this.notes.join('\n')}\n\n${message}`;
       this.notes = [];
     }
-    const shown = { text, context: [ctx?.label, ...pinned].filter(Boolean).map(shortLabel), images: images.map((i) => `data:${i.mimeType};base64,${i.data}`) };
+    const shown = { text, context: [ctx?.label, ...pinned, ...attachments.map((a) => a.label)].filter(Boolean).map(shortLabel),
+      images: images.map((i) => `data:${i.mimeType};base64,${i.data}`) };
     // The awaits above (skill list, terminal copy) can outlast a restart: send to the omp running now.
     client = this.client || await this.ensureClient();
     if (this.busy && !isCommand) {
@@ -2254,7 +2300,9 @@ class ChatProvider {
       <button id="attach" class="chip addctx" title="Mention a file, folder, @git, @problems… (@)"><span class="codicon codicon-mention"></span><span class="plabel">Add context</span></button>
       <span id="ctxChip" class="chip" hidden><button id="ctxEye"><span id="ctxIcon" class="codicon codicon-eye"></span><span id="ctxLabel" class="plabel"></span></button><button id="ctxPin" class="ctxx" title="Keep this file attached to every message"><span class="codicon codicon-pin"></span></button></span>
       <span id="pinned"></span>
+      <span id="attached"></span>
     </div>
+    <div id="dropHint"><span class="codicon codicon-cloud-upload"></span>Drop to attach: images, PDF, Word, Excel, text or code files</div>
     <div id="thumbs" hidden></div>
     <div id="shellHint" hidden><span class="codicon codicon-terminal"></span>Shell command: runs in the workspace, and the output joins the conversation</div>
     <div id="memHint" hidden><span class="codicon codicon-bookmark"></span>Memory: saved to the project's AGENTS.md, so the agent remembers it in every chat</div>
@@ -2266,8 +2314,8 @@ class ChatProvider {
       <button id="meter" class="pill" title="Usage &amp; limits" hidden><span id="ring" class="ring"></span><span id="meterText"></span></button>
       <button id="model" class="pill" title="Model and effort" aria-haspopup="listbox"><span id="modelName"></span><span id="effort"></span></button>
       <button id="slash" class="icon" title="Commands (/)"><span class="glyph">/</span></button>
-      <button id="addImage" class="icon" title="Attach images (or paste / drop them)"><span class="codicon codicon-file-media"></span></button>
-      <input id="imageFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+      <button id="addImage" class="icon" title="Attach files or images (or paste / drop them)"><span class="codicon codicon-add"></span></button>
+      <input id="imageFile" type="file" multiple hidden>
       <button id="stop" class="icon send" hidden title="Stop (the agent keeps what it did so far)"><span class="codicon codicon-primitive-square"></span></button>
       <button id="send" class="icon send" title="Send (Enter)"><span class="codicon codicon-arrow-up"></span></button>
     </div>
