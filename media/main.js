@@ -996,7 +996,11 @@
           rm.classList.add('armed');
           setTimeout(() => { delete rm.dataset.armed; rm.classList.remove('armed'); rm.title = 'Remove'; }, 3000);
         };
-        r.append(ren, rm);
+        const url = el('button', 'icon');
+        url.title = 'Base URL';
+        url.appendChild(icon('globe'));
+        url.onclick = () => vscode.postMessage({ type: 'editBaseUrl', env: g.env, id: k.id });
+        r.append(ren, url, rm);
         sec.appendChild(r);
       }
       if (!g.keys.length) sec.appendChild(el('div', 'unote', 'No key yet.'));

@@ -29,5 +29,18 @@ const ctx = { secrets: { get: async (k) => sec.get(k), store: async (k, v) => se
   assert(keys.isQuotaError(429, '') && keys.isQuotaError(402, '') && keys.isQuotaError(undefined, 'Rate limit exceeded: free-models-per-day'));
   assert(!keys.isQuotaError(401, '401 Authentication Fails') && !keys.isQuotaError(500, 'socket hang up'));
   assert.strictEqual(keys.mask('sk-or-work-5678'), 'sk-or…5678');
+  // provider ids match omp's; a key's base URL applies to its provider while that key is active
+  assert.strictEqual(keys.providerOf('xai/grok-4.5').label, 'xAI');
+  assert.strictEqual(keys.providerOf('openrouter/anthropic/claude-sonnet-5-5').label, 'OpenRouter');
+  assert.strictEqual(keys.normalizeBaseUrl(' https://proxy.local/v1/ '), 'https://proxy.local/v1');
+  assert.strictEqual(keys.normalizeBaseUrl(''), '');
+  assert.strictEqual(keys.normalizeBaseUrl('ftp://x'), null);
+  assert.strictEqual(keys.normalizeBaseUrl('not a url'), null);
+  const px = await keys.addKey(ctx, 'ANTHROPIC_API_KEY', 'proxy', 'sk-ant-1', 'https://proxy.local', 'anthropic');
+  assert.deepStrictEqual(await keys.baseUrlsFor(ctx), { anthropic: 'https://proxy.local' });
+  await keys.addKey(ctx, 'ANTHROPIC_API_KEY', 'direct', 'sk-ant-2');
+  assert.deepStrictEqual(await keys.baseUrlsFor(ctx), {});
+  await keys.setActive(ctx, 'ANTHROPIC_API_KEY', px.id);
+  assert.deepStrictEqual(await keys.baseUrlsFor(ctx), { anthropic: 'https://proxy.local' });
   
 })().catch((e) => { console.error(e); process.exit(1); });

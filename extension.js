@@ -561,14 +561,20 @@ class ChatProvider {
           options: PROVIDERS.map((p) => ({ value: p.label, label: `${p.label} — ${p.description}` })) },
         { name: 'key', label: 'API key', type: 'password', placeholder: 'Paste the key', required: true },
         { name: 'label', label: 'Name (optional)', placeholder: 'e.g. work, personal' },
+        { name: 'baseUrl', label: 'Base URL (optional)', placeholder: "Proxy or compatible endpoint; empty = the provider's own" },
       ],
       submit: 'Save key', cancel: intro ? 'Skip' : 'Cancel',
     });
     if (!v?.key?.trim()) return false;
+    const baseUrl = keys.normalizeBaseUrl(v.baseUrl);
+    if (baseUrl === null) {
+      this.post({ type: 'error', text: `"${v.baseUrl}" is not an http(s) URL; the key was not saved.` });
+      return false;
+    }
     const p = PROVIDERS.find((x) => x.label === v.provider) || PROVIDERS[0];
     const count = (await keys.loadKeys(this.context, p.env)).length;
     const label = v.label?.trim() || (count ? `${p.label} ${count + 1}` : p.label);
-    await keys.addKey(this.context, p.env, label, v.key.trim());
+    await keys.addKey(this.context, p.env, label, v.key.trim(), baseUrl, p.prefix.slice(0, -1));
     // Move to this provider when the current model has no key to run with.
     const cfg = vscode.workspace.getConfiguration('ompChat');
     const cur = keys.providerOf(cfg.get('model'));
@@ -587,7 +593,7 @@ class ChatProvider {
       const list = await keys.loadKeys(this.context, env);
       const active = keys.activeKey(this.context, env, list);
       return { env, label: keys.groupLabel(env), providers: PROVIDERS.filter((p) => p.env === env).map((p) => p.label),
-        keys: list.map((k) => ({ id: k.id, label: k.label, mask: keys.mask(k.key), active: k.id === active?.id })) };
+        keys: list.map((k) => ({ id: k.id, label: k.label, mask: keys.mask(k.key) + (k.baseUrl ? ` · ${k.baseUrl}` : ''), active: k.id === active?.id })) };
     }));
   }
 
@@ -599,6 +605,36 @@ class ChatProvider {
   async renameKey(env, id, label) {
     if (!label?.trim()) return;
     await keys.updateKeys(this.context, env, (l) => l.map((k) => (k.id === id ? { ...k, label: label.trim() } : k)));
+    this.showKeys();
+  }
+
+  async editBaseUrl(env, id) {
+    const list = await keys.loadKeys(this.context, env);
+    const k = list.find((x) => x.id === id);
+    if (!k) return;
+    const providers = PROVIDERS.filter((p) => p.env === env);
+    const current = providers.find((p) => p.prefix === `${k.provider}/`) || providers[0];
+    const v = await this.ask({
+      title: `Base URL of "${k.label}"`,
+      text: "Empty = the provider's own endpoint.",
+      fields: [
+        // OpenCode Go and Zen share a key but not an endpoint: say which one the URL replaces.
+        ...(providers.length > 1 ? [{ name: 'provider', label: 'Provider', type: 'select', value: current.label,
+          options: providers.map((p) => ({ value: p.label, label: p.label })) }] : []),
+        { name: 'baseUrl', label: 'Base URL (optional)', value: k.baseUrl || '', placeholder: "Proxy or compatible endpoint; empty = the provider's own" },
+      ],
+      submit: 'Save', cancel: 'Cancel',
+    });
+    if (!v) return;
+    const baseUrl = keys.normalizeBaseUrl(v.baseUrl);
+    if (baseUrl === null) return this.post({ type: 'error', text: `"${v.baseUrl}" is not an http(s) URL; the base URL was not changed.` });
+    const p = providers.find((x) => x.label === v.provider) || current;
+    await keys.updateKeys(this.context, env, (l) => l.map((x) => {
+      if (x.id !== id) return x;
+      const { baseUrl: _, provider: __, ...rest } = x;
+      return baseUrl ? { ...rest, baseUrl, provider: p.prefix.slice(0, -1) } : rest;
+    }));
+    if (keys.activeKey(this.context, env, list)?.id === id) await this.restart(); // omp is using it
     this.showKeys();
   }
 
@@ -650,6 +686,7 @@ class ChatProvider {
       case 'useKey': await this.useKey(m.env, m.id); return m.from === 'keys' ? this.showKeys() : this.showUsage();
       case 'renameKey': return this.renameKey(m.env, m.id, m.label);
       case 'removeKey': return this.removeKey(m.env, m.id);
+      case 'editBaseUrl': return this.editBaseUrl(m.env, m.id);
       case 'rewind': return this.rewind(m.turn, !!m.restoreCode);
       case 'promoteQueued': return this.promoteQueued(m.qid);
       case 'removeQueued': return this.removeQueued(m.qid);
@@ -708,6 +745,7 @@ class ChatProvider {
   async spawn() {
     // The active saved key of each provider; switching keys means respawning (see restart()).
     const env = { ...process.env, ...(await keys.envFor(this.context)) };
+    const baseUrls = await keys.baseUrlsFor(this.context);
     // Read config after the awaits so a setting changed meanwhile is picked up.
     const cfg = vscode.workspace.getConfiguration('ompChat');
     this.cwd = this.worktree?.cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
@@ -716,7 +754,7 @@ class ChatProvider {
     const mode = cfg.get('approvalMode') === 'plan' ? 'always-ask' : cfg.get('approvalMode');
     const args = ['--mode', 'rpc', '--model', cfg.get('model'), ...(mode ? ['--approval-mode', mode] : []), `--thinking=${thinkingLevel(cfg)}`,
       ...(cfg.get('announceSteps', true) ? [`--append-system-prompt=${ANNOUNCE_STEPS}`] : []), // a later one in extraArgs wins
-      ...this.overlayArgs(), ...cfg.get('extraArgs', [])];
+      ...this.overlayArgs(), ...this.baseUrlArgs(baseUrls), ...cfg.get('extraArgs', [])];
     const ompPath = cfg.get('ompPath') || 'omp';
     const fallback = ompPath === 'omp' ? this.ompFallback : null;
     const command = fallback ? fallback.omp : ompPath;
@@ -759,6 +797,13 @@ class ChatProvider {
         if (this.client !== client) this.resume = { file, replay }; // omp failed to start: keep it for the retry
         else this.post({ type: 'error', text: `Could not resume the conversation: ${e.message}` });
       }
+    }
+    // omp resolves the startup (or resumed) model before extensions register providers: pick it again to get its base URL.
+    if (Object.keys(baseUrls).length) {
+      try {
+        const { model } = await client.request({ type: 'get_state' });
+        if (model && baseUrls[model.provider]) await client.request({ type: 'set_model', provider: model.provider, modelId: model.id });
+      } catch {}
     }
     this.track(client);
     // Live subagent lifecycle + progress frames (off by default in omp's RPC mode).
@@ -1246,6 +1291,21 @@ class ChatProvider {
       return ['--config', file];
     } catch (e) {
       this.post({ type: 'error', text: `Could not write omp's settings overlay: ${e.message}` });
+      return [];
+    }
+  }
+
+  // Base URLs reach omp through a tiny extension (omp has no flag or env var that works for every provider).
+  baseUrlArgs(urls) {
+    const dir = this.context.globalStorageUri?.fsPath;
+    if (!Object.keys(urls).length || !dir) return [];
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, 'omp-base-urls.js');
+      fs.writeFileSync(file, `export default function (pi) {\n  for (const [id, baseUrl] of Object.entries(${JSON.stringify(urls)})) pi.registerProvider(id, { baseUrl });\n}\n`);
+      return ['-e', file];
+    } catch (e) {
+      this.post({ type: 'error', text: `Could not apply the base URL: ${e.message}` });
       return [];
     }
   }
