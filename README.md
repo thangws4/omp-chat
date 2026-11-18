@@ -294,7 +294,7 @@ The longer conversation is kept as an earlier chat (🕘). In a reopened convers
 
 - Reloading the window reopens the last conversation of the workspace. If the agent was in the middle of a turn when the window closed, the chat says so and offers **Continue**.
 - **+** (title bar) starts a new chat.
-- **🕘** (title bar) lists earlier conversations of this workspace; type to filter, **Enter** to open. Their diffs and **Undo** buttons work again. ✏ (**F2**) renames a conversation, 🗑 (**Del**) moves it to the trash.
+- **🕘** (title bar) lists the conversations of this workspace (up to 100), grouped by day with the time or date, the open one marked **current**. Type to filter; **Enter** opens the latest other conversation (or the one you move to). Their diffs and **Undo** buttons work again. Hover a conversation for ✏ (**F2**) to rename it and 🗑 (**Del**) to move it to the trash; **New chat** at the top starts a new one.
 - **…** → **Export Chat as Markdown** opens the conversation as a Markdown document (your messages, replies, tool calls and shell commands) to save or share.
 - When the context window is 80% full, the chat suggests **Compact now** (`/compact`): omp replaces the older part of the conversation with a summary and frees the space.
 

@@ -1343,7 +1343,7 @@
   function filterPicker(query) {
     const q = query.toLowerCase();
     pk.items = pk.all.map((it, i) => [rank(it, q), i, it]).filter(([r]) => r >= 0)
-      .sort((a, b) => a[0] - b[0] || a[1] - b[1]).slice(0, 60).map(([, , it]) => it);
+      .sort((a, b) => a[0] - b[0] || a[1] - b[1]).slice(0, pk.kind === 'history' ? 100 : 60).map(([, , it]) => it);
     pk.active = Math.min(pk.active, Math.max(0, pk.items.length - 1));
     renderPicker();
   }
@@ -1353,6 +1353,14 @@
     if (!pk.items.length && !ownFilter(pk)) return hidePicker();
     popup.textContent = '';
     popup.className = 'picker-' + pk.kind;
+    if (pk.kind === 'history') { // a title with the count, and a way to start over
+      const top = el('div', 'ptop');
+      const nw = el('button', 'pnew');
+      nw.append(icon('add'), el('span', '', 'New chat'));
+      nw.onmousedown = (e) => { e.preventDefault(); hidePicker(); vscode.postMessage({ type: 'new' }); };
+      top.append(el('span', 'ptitle', 'Chats'), el('span', 'pcount', String(pk.all.length)), el('span', 'spacer'), nw);
+      popup.appendChild(top);
+    }
     if (ownFilter(pk)) {
       const head = el('div', 'phead');
       pk.filter ??= el('input', 'pfilter');
@@ -1493,12 +1501,22 @@
     const today = new Date().setHours(0, 0, 0, 0), day = 86400000;
     return t >= today ? 'Today' : t >= today - day ? 'Yesterday' : t >= today - 7 * day ? 'Previous 7 days' : 'Older';
   }
+  // When, as fits its day group: the time today and yesterday, the weekday this week, the date before that.
+  function when(t) {
+    const g = dayGroup(t), d = new Date(t);
+    if (g === 'Today' || g === 'Yesterday') return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (g === 'Previous 7 days') return d.toLocaleDateString([], { weekday: 'short' });
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric', ...(d.getFullYear() !== new Date().getFullYear() && { year: 'numeric' }) });
+  }
   function showSessions(m) { // the list comes newest first
-    const all = m.list.map((x) => ({ key: x.title, label: x.title, desc: ago(x.when), icon: x.current ? 'check' : 'comment-discussion', file: x.file, group: dayGroup(x.when),
+    const all = m.list.map((x) => ({ key: x.title, label: x.title, desc: when(x.when), badge: x.current ? 'current' : '', file: x.file, group: dayGroup(x.when),
+      tip: `${x.title}\n${new Date(x.when).toLocaleString()}`, cls: x.current ? 'cur' : '',
       actions: [{ icon: 'edit', title: 'Rename (F2)', msg: { type: 'renameSession', file: x.file } },
         { icon: 'trash', title: 'Delete (Del)', msg: { type: 'deleteSession', file: x.file } }] }));
     pk = null;
     openPicker('history', all, (it) => vscode.postMessage({ type: 'openSession', file: it.file }));
+    pk.active = Math.max(0, all.findIndex((x) => !x.badge)); // Enter opens the latest other conversation
+    renderPicker();
   }
   const modelBadge = (x) => (x.usedUp ? `used up · ${x.usedUp}` : x.plan ? 'Go plan' : x.free ? 'free' : '');
   // "1M ctx · images · $2 / $10": what tells models apart when picking one (price per 1M tokens in / out).

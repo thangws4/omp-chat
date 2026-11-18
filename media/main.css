@@ -542,6 +542,23 @@ button.send .codicon { font-size: 14px; }
 #popup .pgroup { padding: 6px 8px 2px; font-size: .8em; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--vscode-descriptionForeground); }
 #popup .pempty { padding: 6px 8px; color: var(--vscode-descriptionForeground); }
 #popup.picker-history .pname, #popup.picker-file .pname { font-family: inherit; }
+/* chat history: taller, over a dimmed panel; titles take the room, the time sits right and gives way to the actions on hover */
+#popup.picker-history { max-height: calc(100vh - 90px); box-shadow: 0 4px 16px var(--vscode-widget-shadow, rgba(0,0,0,.35)), 0 0 0 100vmax rgba(0,0,0,.25); }
+#popup .ptop { display: flex; align-items: center; gap: 6px; padding: 8px 10px 2px; flex: none; }
+#popup .ptitle { font-weight: 600; }
+#popup .pcount { font-size: .8em; padding: 0 6px; border-radius: 8px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+#popup .pnew { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; font-size: .9em; border-radius: 4px; color: var(--vscode-textLink-foreground); }
+#popup .pnew:hover { background: var(--vscode-toolbar-hoverBackground); }
+#popup.picker-history .pgroup { position: sticky; top: 0; z-index: 1; background: var(--vscode-editorSuggestWidget-background); padding-top: 8px; }
+#popup.picker-history .item { padding: 5px 10px; }
+#popup.picker-history .item .pname { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#popup.picker-history .item .pdesc { flex: none; font-size: .85em; }
+#popup.picker-history .item .pbadge { margin-left: 0; }
+#popup.picker-history .item .pact { display: none; }
+#popup.picker-history .item:hover .pact, #popup.picker-history .item.active .pact { display: inline-flex; opacity: .85; }
+#popup.picker-history .item:hover .pdesc, #popup.picker-history .item.active .pdesc { display: none; }
+#popup.picker-history .item.cur { box-shadow: inset 2px 0 var(--vscode-focusBorder); }
+#popup.picker-history .item.cur .pname { font-weight: 600; }
 #popup .item.active { background: var(--vscode-editorSuggestWidget-selectedBackground); color: var(--vscode-editorSuggestWidget-selectedForeground); }
 /* two-line rows (models): the name, and a muted line with the provider, context, images and price */
 #popup .item.two { align-items: center; padding: 5px 8px; }
