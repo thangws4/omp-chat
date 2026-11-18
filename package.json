@@ -4,6 +4,7 @@
   "description": "AI coding chat panel for VS Code, powered by the oh-my-pi (omp) agent and OpenRouter / DeepSeek models.",
   "version": "0.6.8",
   "publisher": "dtcode-dev",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/thangws4/omp-chat.git"
