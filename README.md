@@ -260,7 +260,7 @@ Click the model name in the toolbar to open the model list. Each model shows its
 
 The **Effort** row sets how much the model thinks before answering: `low`, `medium`, `high` (the default) or `max`, as in Claude Code. The choice shows after the model name and applies to the running conversation. Models without reasoning ignore it.
 
-**Your models.** The model list shows only your models (★) plus the one in use. **Manage models…** (last entry of that list, or **…** → **Manage Models…**) shows every model omp can run, with a filter: click ☆ to add a model to your models, **Use** to switch to it. Your models sit on top, where ↑ ↓ set their order and ✕ removes one. They are kept across workspaces.
+**Your models.** The model list shows only your models (★) plus the one in use. **Manage models…** (last entry of that list, or **…** → **Manage Models…**) shows every model omp can run, with a filter and one-click filters for **free**, **go plan** and **images**: click ☆ to add a model to your models, click the model itself to switch to it. Your models sit on top, where ↑ ↓ (on hover) set their order and ✕ removes one. They are kept across workspaces.
 
 <details>
 <summary>Keyboard in <b>Manage models…</b></summary>
@@ -364,7 +364,7 @@ A command is a saved prompt you send by typing `/name`. **…** → **Custom Com
 
 - **New command…**: a name, a description, an optional argument hint and the prompt. `$ARGUMENTS` in the prompt is replaced by what you type after the name, so `/review src/app.ts` sends the prompt about that file.
 - **Save for** this project (`.omp/commands/<name>.md`, can be committed and shared with your team) or all projects (`~/.omp/agent/commands`).
-- Each command has **Use** (puts it in the message box), ✏ (opens the file to edit) and 🗑 (click twice; the file goes to the trash).
+- Commands are grouped into **This project** and **All projects** (`.claude` marks Claude Code's). Click one to put it in the message box; hover it for ✏ (opens the file to edit) and 🗑 (click twice; the file goes to the trash).
 
 Claude Code commands (`.claude/commands/*.md`) are listed and work too.
 
@@ -374,7 +374,7 @@ Claude Code commands (`.claude/commands/*.md`) are listed and work too.
 
 - the switch turns a server on or off, ▷ tests the connection, 🗑 removes it (click twice);
 - **Add server…** takes a name and either a command (a local server, e.g. `npx -y @modelcontextprotocol/server-filesystem .`) or a URL (a remote server);
-- servers start with the agent, so after a change **Restart agent to apply** (the conversation is kept).
+- servers start with the agent, so after a change a banner offers **Restart agent** (the conversation is kept).
 
 Servers that need a browser sign-in (OAuth) have to be authorized once in omp's terminal app.
 

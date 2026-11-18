@@ -456,30 +456,41 @@
   function showSubagentTranscript(m) {
     const s = openSheet(`${m.id} · ${m.agent || 'subagent'}`, 'hubot', () => vscode.postMessage({ type: 'subagentView', id: m.id }));
     s.classList.add('transcript');
-    s.appendChild(el('div', 'unote', `${m.status === 'running' ? 'Running' : m.status} · ${m.messages.length} messages. Refresh to follow it while it runs.`));
+    // status: running (with the loader), completed, failed…
+    const st = el('div', 'tstatus');
+    const pill = el('span', 'tpill ' + (m.status || ''));
+    if (m.status === 'running') pill.appendChild(spark());
+    else pill.appendChild(icon(m.status === 'completed' ? 'pass-filled' : m.status === 'failed' ? 'error' : 'circle-slash'));
+    pill.appendChild(el('span', '', m.status === 'running' ? 'Running' : m.status || ''));
+    st.append(pill, el('span', 'unote', `${m.messages.length} messages${m.status === 'running' ? ' · refresh to follow it' : ''}`));
+    s.appendChild(st);
     const box = el('div', 'tscroll');
+    const item = (kind, ...kids) => { const d = el('div', 'tl ' + kind); d.append(...kids); box.appendChild(d); return d; };
     for (const x of m.messages) {
-      if (x.role === 'task') {
-        const d = el('details', 'tmsg');
-        d.appendChild(el('summary', '', 'Task brief'));
-        d.appendChild(el('pre', 'out', x.text));
+      if (x.role === 'task') { // what it was asked to do: open, as a card
+        const d = el('details', 'tbrief');
+        d.open = true;
+        const sum = el('summary');
+        sum.append(icon('target'), el('span', '', 'Task'));
+        d.append(sum, el('pre', 'out', x.text));
         box.appendChild(d);
       } else if (x.role === 'assistant') {
-        if (x.text?.trim()) { const t = el('div', 'md'); t.innerHTML = md.render(x.text); box.appendChild(t); }
+        if (x.text?.trim()) { const t = el('div', 'md'); t.innerHTML = md.render(x.text); item('say', t); }
         for (const t of x.tools || []) {
-          const r = el('div', 'ttool');
-          r.append(icon('tools'), el('span', 'tverb', t.name), el('code', 'targ', t.detail));
-          box.appendChild(r);
+          const verb = (VERBS[t.name] || [t.name, t.name])[1];
+          item('call', icon('tools'), el('span', 'tverb', verb), el('code', 'targ', t.detail || ''));
         }
       } else {
         const d = el('details', 'tmsg' + (x.isError ? ' err' : ''));
-        d.appendChild(el('summary', '', `${x.isError ? '✕' : '↳'} ${x.name} output`));
-        d.appendChild(el('pre', 'out', x.text));
-        box.appendChild(d);
+        const sum = el('summary');
+        sum.append(icon(x.isError ? 'error' : 'output'), el('span', '', `${x.name} output`), el('span', 'tlen', `${String(x.text || '').split('\n').length} lines`));
+        d.append(sum, el('pre', 'out', x.text));
+        item('out' + (x.isError ? ' err' : ''), d);
       }
     }
-    if (!m.messages.length) box.appendChild(el('div', 'unote', 'Nothing yet.'));
+    if (!m.messages.length) box.appendChild(el('div', 'sempty', 'Nothing yet.'));
     s.appendChild(box);
+    if (m.status === 'running') box.scrollTop = box.scrollHeight; // follow the latest step
   }
 
   const VERBS = { // [while running, when done]
@@ -780,18 +791,42 @@
   }
 
   // Form sent by the extension: { id, title, text?, fields: [{ name, label, type?, value?, placeholder?, options?, required? }], submit, cancel }
+  // A line of text with its http(s) links clickable (VS Code opens them in the browser).
+  function linkify(text, cls) {
+    const d = el('div', cls);
+    String(text).split(/(https?:\/\/[^\s·,)]+)/).forEach((part, i) => {
+      if (i % 2) { const a = el('a', '', part); a.href = part; d.appendChild(a); } else if (part) d.appendChild(document.createTextNode(part));
+    });
+    return d;
+  }
   function showForm(m) {
     const s = openSheet(m.title, 'edit');
+    s.classList.add('form');
     openForm = m.id;
-    if (m.text) for (const line of m.text.split('\n')) s.appendChild(el('div', 'unote', line));
-    const inputs = {};
+    if (m.text) for (const line of m.text.split('\n')) if (line.trim()) s.appendChild(linkify(line, 'unote'));
+    const inputs = {}, errors = {};
     for (const f of m.fields || []) {
-      const row = el('label', 'frow');
-      row.appendChild(el('span', 'flabel', f.label));
-      let inp;
+      const row = el('div', 'frow');
+      const label = el('label', 'flabel', f.label);
+      if (f.required) label.appendChild(el('span', 'freq', ' *'));
+      row.appendChild(label);
+      let inp, after = null;
       if (f.type === 'select') {
         inp = el('select', 'finput');
         for (const o of f.options) { const op = el('option', '', o.label); op.value = o.value; inp.appendChild(op); }
+        if (f.options.some((o) => o.link)) { // where to get one, for the option picked
+          after = el('a', 'flink');
+          const sync = () => {
+            const o = f.options.find((x) => x.value === inp.value);
+            after.hidden = !o?.link;
+            if (!o?.link) return;
+            after.href = o.link;
+            after.textContent = '';
+            after.append(icon('link-external'), el('span', '', `Get a key at ${o.link.replace(/^https?:\/\//, '').replace(/\/$/, '')}`));
+          };
+          inp.addEventListener('change', sync);
+          queueMicrotask(sync); // once the value below is set
+        }
       } else if (f.type === 'textarea') {
         inp = el('textarea', 'finput farea');
         inp.rows = 6;
@@ -804,23 +839,43 @@
         inp.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); ok.click(); } };
       }
       if (f.value) inp.value = f.value;
+      inp.id = 'f_' + f.name;
+      label.htmlFor = inp.id;
       inputs[f.name] = inp;
-      row.appendChild(inp);
+      if (f.type === 'password') { // 👁 to check what was pasted
+        const wrap = el('div', 'fpass');
+        const eye = iconBtn('eye', 'Show', () => {
+          const show = inp.type === 'password';
+          inp.type = show ? 'text' : 'password';
+          eye.firstChild.className = 'codicon codicon-' + (show ? 'eye-closed' : 'eye');
+          eye.title = show ? 'Hide' : 'Show';
+        });
+        wrap.append(inp, eye);
+        row.appendChild(wrap);
+      } else row.appendChild(inp);
+      if (after) row.appendChild(after);
+      errors[f.name] = row.appendChild(el('div', 'ferr', ''));
+      inp.addEventListener('input', () => { inp.classList.remove('invalid'); errors[f.name].textContent = ''; });
       s.appendChild(row);
     }
-    const btns = el('div', 'cbtns');
+    const btns = el('div', 'fbtns');
     const ok = el('button', 'primary', m.submit || 'OK');
     ok.onclick = () => {
       const values = Object.fromEntries(Object.entries(inputs).map(([k, v]) => [k, v.value]));
       const missing = (m.fields || []).find((f) => f.required && !values[f.name]?.trim());
-      if (missing) { inputs[missing.name].focus(); inputs[missing.name].classList.add('invalid'); return; }
+      if (missing) {
+        inputs[missing.name].focus();
+        inputs[missing.name].classList.add('invalid');
+        errors[missing.name].textContent = 'Required';
+        return;
+      }
       vscode.postMessage({ type: 'formAnswer', id: m.id, values });
       openForm = null;
       closeSheet();
     };
     const cancel = el('button', 'secondary', m.cancel || 'Cancel');
     cancel.onclick = closeSheet;
-    btns.append(ok, cancel);
+    btns.append(cancel, ok);
     s.appendChild(btns);
     (Object.values(inputs).find((i) => i.tagName !== 'SELECT' && !i.value) || ok).focus();
   }
@@ -970,15 +1025,18 @@
       r.appendChild(text);
       const badge = modelBadge(x);
       if (badge) r.appendChild(el('span', 'pbadge', badge));
-      if (x.id !== m.current) {
-        const use = el('button', 'secondary', 'Use');
-        use.onclick = () => { vscode.postMessage({ type: 'setModel', id: x.id }); closeSheet(); };
-        r.appendChild(use);
-      } else r.appendChild(el('span', 'minuse', 'in use'));
+      if (x.id === m.current) r.appendChild(el('span', 'kuse', 'in use'));
+      else { // the whole row switches to this model, as Enter does
+        r.classList.add('pick');
+        r.title = 'Use this model (Enter)';
+        r.onclick = (e) => { if (e.target.closest('button')) return; vscode.postMessage({ type: 'setModel', id: x.id }); closeSheet(); };
+      }
       if (inFav) {
-        r.appendChild(btn('arrow-up', 'Move up', () => vscode.postMessage({ type: 'moveFavorite', id: x.id, dir: -1 }), i === 0));
-        r.appendChild(btn('arrow-down', 'Move down', () => vscode.postMessage({ type: 'moveFavorite', id: x.id, dir: 1 }), i === n - 1));
-        r.appendChild(btn('close', 'Remove from your models', () => toggle(x.id)));
+        const acts = el('span', 'lacts');
+        acts.append(btn('arrow-up', 'Move up (Alt+↑)', () => vscode.postMessage({ type: 'moveFavorite', id: x.id, dir: -1 }), i === 0),
+          btn('arrow-down', 'Move down (Alt+↓)', () => vscode.postMessage({ type: 'moveFavorite', id: x.id, dir: 1 }), i === n - 1),
+          btn('close', 'Remove from your models', () => toggle(x.id)));
+        r.appendChild(acts);
       }
       return r;
     };
@@ -986,22 +1044,34 @@
     const favBox = s.appendChild(el('div', 'usec'));
     const allBox = s.appendChild(el('div', 'usec'));
     const filter = el('input', 'finput pfilterbox');
-    filter.placeholder = 'Filter all models, e.g. "free", "deepseek", "kimi"';
+    filter.placeholder = 'Filter all models, e.g. "deepseek", "kimi"';
     filter.value = modelFilter;
-    const list = el('div', 'mlist');
+    const fbox = el('div', 'pfilterwrap');
+    fbox.append(icon('search'), filter);
+    const quick = el('div', 'mquick'); // one-click filters
+    for (const q of ['free', 'go plan', 'images']) {
+      const c = el('button', 'chip' + (modelFilter.toLowerCase() === q ? ' on' : ''), q);
+      c.dataset.q = q; // the label may be translated
+      c.onclick = () => { filter.value = filter.value.toLowerCase() === q ? '' : q; renderAll(); filter.focus(); };
+      quick.appendChild(c);
+    }
+    const list = el('div', 'mlist kcard');
 
     function renderFav() {
       favBox.textContent = '';
       favBox.appendChild(el('div', 'ush', `Your models · ${fav.length}`));
-      fav.forEach((id, i) => favBox.appendChild(row(byId.get(id) || { id }, true, i, fav.length)));
-      if (!fav.length) note(favBox, 'None yet. Star models below; they will be the ones offered in the chat.');
+      const card = el('div', 'kcard');
+      fav.forEach((id, i) => card.appendChild(row(byId.get(id) || { id }, true, i, fav.length)));
+      if (fav.length) favBox.appendChild(card);
+      else note(favBox, 'None yet. Star (☆) models below; they will be the ones offered in the chat.');
     }
     function renderAll() {
       modelFilter = filter.value;
       try { vscode.setState({ ...(vscode.getState() || {}), modelFilter }); } catch { /* state is a convenience */ }
       const q = filter.value.toLowerCase().trim();
       const match = (x) => !q || x.id.toLowerCase().includes(q) || (x.name || '').toLowerCase().includes(q)
-        || (q === 'free' && x.free) || ((q === 'go' || q === 'go plan') && x.plan);
+        || (q === 'free' && x.free) || ((q === 'go' || q === 'go plan') && x.plan) || (q === 'images' && x.vision);
+      for (const c of quick.children) c.classList.toggle('on', c.dataset.q === q);
       const items = (m.all || []).filter(match);
       list.textContent = '';
       items.slice(0, SHEET_LIMIT).forEach((x) => list.appendChild(row(x, false)));
@@ -1025,7 +1095,7 @@
       r?.focus();
       return !!r;
     }
-    allBox.append(el('div', 'ush', ''), filter, list);
+    allBox.append(el('div', 'ush', ''), fbox, quick, list);
     filter.oninput = renderAll;
     renderFav();
     renderAll();
@@ -1078,64 +1148,109 @@
     return b;
   };
 
+  // A list row shared by the Commands and MCP sheets: a lead (icon or switch), a title over a muted line,
+  // badges, and actions that show on hover. `onPick` makes the whole row its main action.
+  function listRow({ lead, title, titleClass, sub, badges = [], actions = [], onPick, pickTitle, off }) {
+    const r = el('div', 'lrow' + (onPick ? ' pick' : '') + (off ? ' off' : ''));
+    if (lead) r.appendChild(lead);
+    const main = el('div', 'lmain');
+    const head = el('div', 'lhead');
+    head.appendChild(el('span', 'ltitle' + (titleClass ? ' ' + titleClass : ''), title));
+    for (const b of badges) if (b) head.appendChild(el('span', 'lbadge', b));
+    main.appendChild(head);
+    if (sub) { const d = el('div', 'lsub', sub); d.title = sub; main.appendChild(d); }
+    const acts = el('span', 'lacts');
+    acts.append(...actions);
+    r.append(main, acts);
+    if (onPick) {
+      r.tabIndex = 0;
+      r.title = pickTitle || '';
+      r.onclick = (e) => { if (!e.target.closest('button, .switch')) onPick(); };
+      r.onkeydown = (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === r) { e.preventDefault(); onPick(); } };
+    }
+    return r;
+  }
+  // The sheet's main action, next to its intro line.
+  function sheetIntro(s, text, label, onclick) {
+    const bar = el('div', 'sintro');
+    const add = el('button', 'primary');
+    add.append(icon('add'), el('span', '', label));
+    add.onclick = onclick;
+    bar.append(el('span', 'unote', text), add);
+    s.appendChild(bar);
+  }
+
   // ---- Your slash commands: prompt files omp loads; type /name in the chat to send one ----
   function showCommandsSheet(m) {
     const s = openSheet('Commands', 'symbol-event', () => vscode.postMessage({ type: 'commandsSheet' }));
-    s.appendChild(el('div', 'unote', 'A command is a saved prompt: type /name in the chat to send it. omp also reads Claude Code commands (.claude/commands).'));
+    s.classList.add('lists');
+    sheetIntro(s, 'A command is a saved prompt: type /name in the chat to send it.', 'New command', () => vscode.postMessage({ type: 'newCommand' }));
     if (m.note) s.appendChild(el('div', 'unote snote', m.note));
-    const sec = section(s, `Your commands · ${m.list.length}`);
-    for (const c of m.list) {
-      const r = el('div', 'mrow');
-      const text = el('div', 'mtext');
-      text.append(el('div', 'mname', `/${c.name}${c.hint ? ' ' + c.hint : ''}`), el('div', 'mid', `${c.description || 'No description'} · ${c.scope}`));
-      const use = el('button', 'secondary', 'Use');
-      use.title = 'Put it in the message box';
-      use.onclick = () => { closeSheet(); input.value = `/${c.name} `; input.focus(); autosize(); };
-      r.append(icon('symbol-event'), text, use,
-        iconBtn('edit', 'Edit the file', () => vscode.postMessage({ type: 'editCommand', file: c.file })),
-        confirmButton('Delete?', 'trash', 'Delete (moves the file to the trash)', () => vscode.postMessage({ type: 'deleteCommand', file: c.file })));
-      sec.appendChild(r);
+    const use = (c) => { closeSheet(); input.value = `/${c.name} `; input.focus(); autosize(); };
+    const scroll = el('div', 'kscroll');
+    s.appendChild(scroll);
+    for (const [title, test] of [['This project', (c) => c.scope.startsWith('project')], ['All projects', (c) => !c.scope.startsWith('project')]]) {
+      const list = m.list.filter(test);
+      if (!list.length) continue;
+      scroll.appendChild(el('div', 'ush', `${title} · ${list.length}`));
+      const card = el('div', 'kcard');
+      for (const c of list) {
+        card.appendChild(listRow({
+          title: `/${c.name}`, titleClass: 'mono', badges: [c.hint, /\.claude/.test(c.scope) ? '.claude' : ''],
+          sub: c.description || 'No description',
+          onPick: () => use(c), pickTitle: 'Put it in the message box',
+          actions: [iconBtn('edit', 'Edit the file', () => vscode.postMessage({ type: 'editCommand', file: c.file })),
+            confirmButton('Delete?', 'trash', 'Delete (moves the file to the trash)', () => vscode.postMessage({ type: 'deleteCommand', file: c.file }))],
+        }));
+      }
+      scroll.appendChild(card);
     }
-    if (!m.list.length) note(sec, 'None yet. Commands you create are saved as Markdown files you can share with your team.');
-    const btns = el('div', 'cbtns');
-    const add = el('button', 'primary', 'New command…');
-    add.onclick = () => vscode.postMessage({ type: 'newCommand' });
-    btns.appendChild(add);
-    s.appendChild(btns);
+    if (!m.list.length) {
+      const empty = el('div', 'sempty');
+      empty.append(icon('symbol-event'), el('div', '', 'No commands yet.'),
+        el('div', 'unote', 'Save a prompt you send often, like "review this file for bugs", and send it again with /review. Commands are Markdown files you can share with your team; Claude Code commands (.claude/commands) show up too.'));
+      scroll.appendChild(empty);
+    }
   }
 
   // ---- MCP servers: switch on/off, test, remove, add (omp's /mcp commands) ----
   function showMcpSheet(m) {
     const s = openSheet('MCP servers', 'plug', () => vscode.postMessage({ type: 'mcp' }));
-    s.appendChild(el('div', 'unote', 'MCP servers give the agent extra tools (GitHub, databases, browsers…). Servers start when the agent starts.'));
-    if (m.note) {
-      const n = el('pre', 'mcpout', m.note);
-      s.appendChild(n);
-    }
-    const sec = section(s, `Servers · ${m.servers.length}`);
-    for (const x of m.servers) {
-      const r = el('div', 'mrow');
-      const t = toggle(x.enabled, x.enabled ? 'Switch off' : 'Switch on');
-      t.box.onchange = () => vscode.postMessage({ type: 'mcpAction', kind: t.box.checked ? 'enable' : 'disable', name: x.name });
-      const text = el('div', 'mtext');
-      text.append(el('div', 'mname', x.name), el('div', 'mid', `${x.type} · ${x.location} · ${x.scope === 'user' ? 'all projects' : 'this project'}`));
-      r.append(t.label, text,
-        iconBtn('debug-start', 'Test the connection', () => vscode.postMessage({ type: 'mcpAction', kind: 'test', name: x.name })),
-        confirmButton('Remove?', 'trash', 'Remove this server', () => vscode.postMessage({ type: 'mcpAction', kind: 'remove', name: x.name })));
-      sec.appendChild(r);
-    }
-    if (!m.servers.length) note(sec, 'No MCP servers in this project or your user settings yet.');
-    const btns = el('div', 'cbtns');
-    const add = el('button', m.changed ? 'secondary' : 'primary', 'Add server…');
-    add.onclick = () => vscode.postMessage({ type: 'addMcp' });
-    btns.appendChild(add);
-    if (m.changed) {
-      const apply = el('button', 'primary', 'Restart agent to apply');
+    s.classList.add('lists');
+    sheetIntro(s, 'MCP servers give the agent extra tools: GitHub, databases, browsers…', 'Add server', () => vscode.postMessage({ type: 'addMcp' }));
+    if (m.changed) { // a banner until the agent restarts with the change
+      const bar = el('div', 'sbanner');
+      const apply = el('button', 'primary', 'Restart agent');
       apply.title = 'The conversation is kept';
       apply.onclick = () => { closeSheet(); vscode.postMessage({ type: 'applyMcp' }); };
-      btns.prepend(apply);
+      bar.append(icon('info'), el('span', '', 'Servers start with the agent: restart it to apply your changes.'), apply);
+      s.appendChild(bar);
     }
-    s.appendChild(btns);
+    if (m.note) s.appendChild(el('pre', 'mcpout', m.note));
+    const scroll = el('div', 'kscroll');
+    s.appendChild(scroll);
+    for (const [title, test] of [['This project', (x) => x.scope !== 'user'], ['All projects', (x) => x.scope === 'user']]) {
+      const list = m.servers.filter(test);
+      if (!list.length) continue;
+      scroll.appendChild(el('div', 'ush', `${title} · ${list.length}`));
+      const card = el('div', 'kcard');
+      for (const x of list) {
+        const t = toggle(x.enabled, x.enabled ? 'Switch off' : 'Switch on');
+        t.box.onchange = () => vscode.postMessage({ type: 'mcpAction', kind: t.box.checked ? 'enable' : 'disable', name: x.name });
+        card.appendChild(listRow({
+          lead: t.label, title: x.name, badges: [x.type], sub: x.location, off: !x.enabled,
+          actions: [iconBtn('debug-start', 'Test the connection', () => vscode.postMessage({ type: 'mcpAction', kind: 'test', name: x.name })),
+            confirmButton('Remove?', 'trash', 'Remove this server', () => vscode.postMessage({ type: 'mcpAction', kind: 'remove', name: x.name }))],
+        }));
+      }
+      scroll.appendChild(card);
+    }
+    if (!m.servers.length) {
+      const empty = el('div', 'sempty');
+      empty.append(icon('plug'), el('div', '', 'No MCP servers yet.'),
+        el('div', 'unote', 'Add one with a command (a local server, e.g. npx -y @modelcontextprotocol/server-filesystem .) or a URL (a remote server).'));
+      scroll.appendChild(empty);
+    }
   }
 
   // Saved keys per provider: switch, rename, remove, add. Providers with keys get a card each; the others are

@@ -562,11 +562,11 @@ class ChatProvider {
     await this.reveal();
     const v = await this.ask({
       title: intro ? 'Connect a model provider' : 'Add an API key',
-      text: (intro ? 'OMP Chat runs the omp agent with your own API key. Skip this if omp already has a login of its own.\n' : '')
-        + 'Get a key: ' + PROVIDERS.map((p) => `${p.label} ${p.url}`).join(' · '),
+      text: intro ? 'OMP Chat runs the omp agent with your own API key. Skip this if omp already has a login of its own.' : '',
       fields: [
+        // The form shows where to get a key for the provider picked, from each option's link.
         { name: 'provider', label: 'Provider', type: 'select', value: providerLabel || PROVIDERS[0].label,
-          options: PROVIDERS.map((p) => ({ value: p.label, label: `${p.label} — ${p.description}` })) },
+          options: PROVIDERS.map((p) => ({ value: p.label, label: `${p.label} — ${p.description}`, link: p.url })) },
         { name: 'key', label: 'API key', type: 'password', placeholder: 'Paste the key', required: true },
         { name: 'label', label: 'Name (optional)', placeholder: 'e.g. work, personal' },
         { name: 'baseUrl', label: 'Base URL (optional)', placeholder: "Proxy or compatible endpoint; empty = the provider's own" },
