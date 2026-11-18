@@ -838,66 +838,100 @@
   function showPlugins(m) {
     const s = openSheet('Plugins & skills', 'extensions', () => vscode.postMessage({ type: 'plugins', refresh: true }));
     s.classList.add('plugins');
-    const state = new Map(); // skill name -> enabled
-    for (const g of m.groups) for (const k of g.skills) state.set(k.name, k.enabled);
+    const state = new Map(), was = new Map(); // skill name -> enabled (now / when opened)
+    for (const g of m.groups) for (const k of g.skills) { state.set(k.name, k.enabled); was.set(k.name, k.enabled); }
 
+    // Auto-pick: a setting card above the list
     const auto = toggle(m.auto, 'Name matching skills to the agent with each message');
-    const autoRow = el('div', 'prow auto');
-    autoRow.append(auto.label, el('span', 'pname', 'Auto-pick skills for each message'));
-    s.appendChild(autoRow);
-    s.appendChild(el('div', 'unote', 'Switched-on skills are always offered to the agent, which chooses among them. Auto-pick also names the best matches for each request. Choices apply to this workspace; Apply restarts the agent and keeps the conversation.'));
+    const autoCard = el('label', 'pauto');
+    const autoText = el('span', 'ptext');
+    autoText.append(el('span', 'pname', 'Auto-pick skills for each message'),
+      el('span', 'pdesc2', 'Switched-on skills are always offered to the agent; auto-pick also names the best matches for each request.'));
+    autoCard.append(autoText, auto.label);
+    s.appendChild(autoCard);
 
+    const fbox = el('div', 'pfilterwrap');
     const filter = el('input', 'finput pfilterbox');
     filter.placeholder = 'Filter plugins and skills';
-    s.appendChild(filter);
+    fbox.append(icon('search'), filter);
+    s.appendChild(fbox);
     const list = el('div', 'plist2');
     s.appendChild(list);
 
-    const open = new Set();
-    function render() {
-      const q = filter.value.toLowerCase();
-      list.textContent = '';
-      for (const g of m.groups) {
-        const match = (k) => !q || k.name.toLowerCase().includes(q) || k.description.toLowerCase().includes(q);
-        const skills = g.skills.filter(match);
-        if (q && !skills.length && !g.name.toLowerCase().includes(q)) continue;
-        const on = g.skills.filter((k) => state.get(k.name)).length;
-        const head = el('div', 'prow');
-        const t = toggle(on > 0, on === g.skills.length ? 'Switch the whole plugin off' : 'Switch the whole plugin on');
-        t.box.indeterminate = on > 0 && on < g.skills.length;
-        t.box.onchange = () => { for (const k of g.skills) state.set(k.name, t.box.checked); render(); };
-        const expand = el('button', 'icon');
-        expand.appendChild(icon(open.has(g.id) || q ? 'chevron-down' : 'chevron-right'));
-        expand.onclick = () => { open.has(g.id) ? open.delete(g.id) : open.add(g.id); render(); };
-        head.append(t.label, el('span', 'pname', g.name), el('span', 'pcount', `${on}/${g.skills.length}${g.source ? ' · ' + g.source : ''}`), el('span', 'spacer'), expand);
-        list.appendChild(head);
-        if (!open.has(g.id) && !q) continue;
-        for (const k of skills) {
-          const row = el('div', 'prow skill');
-          const st = toggle(state.get(k.name));
-          st.box.onchange = () => { state.set(k.name, st.box.checked); render(); };
-          const text = el('div', 'ptext');
-          text.append(el('div', 'pname', k.name), el('div', 'pdesc2', k.description.length > 160 ? k.description.slice(0, 160) + '…' : k.description));
-          row.append(st.label, text);
-          list.appendChild(row);
-        }
-      }
-      if (!list.children.length) list.appendChild(el('div', 'unote', 'No match.'));
-    }
-    filter.oninput = render;
-    render();
-
-    const btns = el('div', 'cbtns');
+    // Footer: what will change, and Apply only once something did
+    const foot = el('div', 'pfoot2');
+    const changes = el('span', 'pchanges');
     const apply = el('button', 'primary', 'Apply');
+    const cancel = el('button', 'secondary', 'Cancel');
+    cancel.onclick = closeSheet;
     apply.onclick = () => {
       const disabled = [...state].filter(([, en]) => !en).map(([n]) => n);
       vscode.postMessage({ type: 'applyPlugins', disabled, auto: auto.box.checked });
       closeSheet();
     };
-    const cancel = el('button', 'secondary', 'Cancel');
-    cancel.onclick = closeSheet;
-    btns.append(apply, cancel);
-    s.appendChild(btns);
+    foot.append(changes, el('span', 'spacer'), cancel, apply);
+    s.append(foot, el('div', 'unote pnote', 'Applies to this workspace. Apply restarts the agent and keeps the conversation.'));
+    const update = () => {
+      const n = [...state].filter(([k, v]) => was.get(k) !== v).length + (auto.box.checked !== !!m.auto ? 1 : 0);
+      changes.textContent = n ? `${n} change${n > 1 ? 's' : ''}` : 'No changes';
+      apply.disabled = !n;
+    };
+    auto.box.onchange = update;
+
+    const open = new Set();
+    const local = (g) => g.id === 'project' || g.id === 'user';
+    function render() {
+      const q = filter.value.toLowerCase();
+      list.textContent = '';
+      for (const [title, groups] of [['Skills', m.groups.filter(local)], ['Plugins', m.groups.filter((g) => !local(g))]]) {
+        const shown = [];
+        for (const g of groups) {
+          const match = (k) => !q || k.name.toLowerCase().includes(q) || k.description.toLowerCase().includes(q);
+          const skills = g.skills.filter(match);
+          if (q && !skills.length && !g.name.toLowerCase().includes(q)) continue;
+          shown.push([g, skills]);
+        }
+        if (!shown.length) continue;
+        list.appendChild(el('div', 'ush', `${title} · ${shown.length}`));
+        for (const [g, skills] of shown) {
+          const on = g.skills.filter((k) => state.get(k.name)).length, isOpen = open.has(g.id) || !!q;
+          const card = el('div', 'pcard' + (isOpen ? ' open' : '') + (on ? '' : ' off'));
+          const head = el('div', 'pghead');
+          head.tabIndex = 0;
+          head.setAttribute('role', 'button');
+          head.setAttribute('aria-expanded', String(isOpen));
+          const t = toggle(on > 0, on === g.skills.length ? 'Switch the whole plugin off' : 'Switch the whole plugin on');
+          t.box.indeterminate = on > 0 && on < g.skills.length;
+          t.box.onchange = () => { for (const k of g.skills) state.set(k.name, t.box.checked); render(); };
+          const name = el('span', 'ptitle2');
+          name.append(el('span', 'pname', g.name));
+          if (g.source) name.appendChild(el('span', 'psrc', g.source));
+          head.append(icon(isOpen ? 'chevron-down' : 'chevron-right', 'pchev'), name, el('span', 'spacer'),
+            el('span', 'pcount', `${on}/${g.skills.length} on`), t.label);
+          head.onclick = (e) => { if (e.target.closest('.switch')) return; open.has(g.id) ? open.delete(g.id) : open.add(g.id); render(); };
+          head.onkeydown = (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === head) { e.preventDefault(); head.click(); } };
+          card.appendChild(head);
+          if (isOpen) {
+            for (const k of skills) {
+              const row = el('div', 'prow skill' + (state.get(k.name) ? '' : ' off'));
+              const st = toggle(state.get(k.name));
+              st.box.onchange = () => { state.set(k.name, st.box.checked); render(); };
+              const text = el('div', 'ptext');
+              const desc = el('div', 'pdesc2', k.description);
+              desc.title = k.description;
+              text.append(el('div', 'pname', k.name), desc);
+              row.append(text, st.label);
+              card.appendChild(row);
+            }
+          }
+          list.appendChild(card);
+        }
+      }
+      if (!list.children.length) list.appendChild(el('div', 'unote', 'No match.'));
+      update();
+    }
+    filter.oninput = render;
+    render();
   }
 
   // ---- Models sheet: every model omp can run; ★ the ones you use and only those show in the chat's picker ----

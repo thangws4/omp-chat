@@ -351,11 +351,11 @@ Account figures need the key saved in OMP Chat (keys that only omp knows about c
 
 ### Plugins & skills panel
 
-The 🧩 button in the title bar (or **OMP Chat: Plugins & Skills**) lists every skill the agent can use here, grouped by where it comes from: your own skills, the project's, and each installed Claude Code plugin (omp picks those up automatically).
+The 🧩 button in the title bar (or **OMP Chat: Plugins & Skills**) lists every skill the agent can use here, in two parts: **Skills** (your own and the project's) and **Plugins** (each installed Claude Code plugin, which omp picks up automatically), each as a card with how many of its skills are on.
 
-- **Switch a plugin on or off** with its toggle, or open it (›) to switch single skills. A half-filled toggle means some of its skills are on.
+- **Switch a plugin on or off** with the switch on its card, or click the card to open it and switch single skills. A half-filled switch means some of its skills are on. Hover a skill for its full description.
 - **Filter** by name or description.
-- **Apply** restarts the agent with your choice and keeps the conversation. The choice applies to this workspace only; Claude Code's and omp's own settings are not changed.
+- **Apply** (enabled once something changed; the footer counts the changes) restarts the agent with your choice and keeps the conversation. The choice applies to this workspace only; Claude Code's and omp's own settings are not changed.
 - **Auto-pick skills for each message**: switched-on skills are always offered to the agent, which chooses among them (as in Claude Code). With auto-pick on, OMP Chat also names up to three skills that match your request (it understands common Vietnamese requests too), and shows *Auto-picked skills: …* in the chat. When the agent opens a skill, its row reads **Using skill** *name*.
 
 ### Your own commands
