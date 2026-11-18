@@ -1741,7 +1741,8 @@ class ChatProvider {
       const id = canDiff ? String(++this.editSeq) : null;
       if (id) this.edits.set(id, { path: f.path, oldText: f.oldText, newText: f.newText, created: f.op === 'create', turn: this.turnSeq });
       if (id && !this.replaying) review.track(f.path, f.oldText, f.op === 'create', this);
-      return { id, rel: vscode.workspace.asRelativePath(f.path), diff: (f.diff || '').slice(0, 20000) };
+      const diff = f.diff || (canDiff ? review.formatDiff(f.oldText, f.newText) : '');
+      return { id, rel: vscode.workspace.asRelativePath(f.path), diff: diff.slice(0, 20000) };
     });
   }
 

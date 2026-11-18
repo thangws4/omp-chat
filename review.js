@@ -36,6 +36,24 @@ function diffLines(a, b) {
   return out;
 }
 
+// a -> b in omp's diff format ("+12|code", "-12|code", " 12|code" for context, "" between hunks), for the
+// changes omp reports without a diff (the write tool).
+function formatDiff(oldText, newText, ctx = 2) {
+  const a = oldText ? split(oldText) : [], b = newText ? split(newText) : [];
+  const hunks = diffLines(a, b), out = [];
+  let shown = 0; // lines of b already printed
+  hunks.forEach((h, k) => {
+    const from = Math.max(shown, h.b0 - ctx);
+    if (out.length && from > shown) out.push('');
+    for (let j = from; j < h.b0; j++) out.push(` ${j + 1}|${b[j]}`);
+    for (let i = h.a0; i < h.a1; i++) out.push(`-${i + 1}|${a[i]}`);
+    for (let j = h.b0; j < h.b1; j++) out.push(`+${j + 1}|${b[j]}`);
+    shown = Math.min(b.length, h.b1 + ctx, hunks[k + 1]?.b0 ?? Infinity);
+    for (let j = h.b1; j < shown; j++) out.push(` ${j + 1}|${b[j]}`);
+  });
+  return out.join('\n');
+}
+
 const hunksOf = (doc) => {
   const f = files.get(key(doc.uri));
   return f ? diffLines(f.base, split(doc.getText())) : [];
@@ -162,4 +180,4 @@ function register(context, translate) {
     vscode.window.onDidChangeVisibleTextEditors(refresh));
 }
 
-module.exports = { register, track, diffLines, files, decide, decideAll };
+module.exports = { register, track, diffLines, formatDiff, files, decide, decideAll };

@@ -67,5 +67,13 @@ const rnd = (n) => Array.from({ length: Math.floor(Math.random() * n) }, () => '
   provider.replay([{ role: 'assistant', content: [{ type: 'toolCall', id: 't2', name: 'edit', arguments: { path: '/w/c.js' } }] },
     { role: 'toolResult', toolCallId: 't2', toolName: 'edit', content: [], details: { path: '/w/c.js', oldText: 'x\n', newText: 'y\n' } }]);
   assert(!review.files.has('/w/c.js'));
+  // writes get a diff in omp's format: context around each change, hunks far apart split by an empty line
+  const before = Array.from({ length: 12 }, (_, i) => `l${i + 1}`);
+  const after = before.map((l) => (l === 'l2' ? 'L2' : l === 'l11' ? 'L11' : l));
+  assert.strictEqual(review.formatDiff(before.join('\n'), after.join('\n')),
+    [' 1|l1', '-2|l2', '+2|L2', ' 3|l3', ' 4|l4', '', ' 9|l9', ' 10|l10', '-11|l11', '+11|L11', ' 12|l12'].join('\n'));
+  assert.strictEqual(review.formatDiff('', 'a\nb'), '+1|a\n+2|b'); // a new file is all additions
+  assert.strictEqual(review.formatDiff('a\nb\nc', 'a\nX\nc', 0), '-2|b\n+2|X');
+  assert.strictEqual(review.formatDiff('same', 'same'), '');
   console.log('review ok');
 })().catch((e) => { console.error(e); process.exit(1); });

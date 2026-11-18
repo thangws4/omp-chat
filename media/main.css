@@ -113,6 +113,22 @@ kbd {
   display: flex; align-items: center; gap: 6px; color: var(--vscode-descriptionForeground); font-size: .92em; margin: 4px 0;
 }
 details > summary { cursor: pointer; list-style: none; }
+/* what the agent is doing right now: three pixels in the logo's colours hopping in turn, and a label that shimmers */
+.spark { display: inline-flex; align-items: center; gap: 2px; width: 16px; height: 16px; flex: none; }
+.spark i { width: 4px; height: 4px; animation: hop 1.05s steps(1, end) infinite; } /* steps: moves a pixel at a time */
+.spark i:nth-child(1) { background: #f84fcc; }
+.spark i:nth-child(2) { background: #9362f4; animation-delay: .175s; }
+.spark i:nth-child(3) { background: #00dbe4; animation-delay: .35s; }
+@keyframes hop { 0% { transform: translateY(0); } 17% { transform: translateY(-2px); } 34% { transform: translateY(-4px); } 50% { transform: translateY(-2px); } 67%, 100% { transform: translateY(0); } }
+.progress > span:not(.spark), .thinking.live .tlabel {
+  background: linear-gradient(90deg, var(--vscode-descriptionForeground) 40%, var(--vscode-foreground) 50%, var(--vscode-descriptionForeground) 60%);
+  background-size: 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: shimmer 2.2s linear infinite;
+}
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .spark i, .progress > span:not(.spark), .thinking.live .tlabel { animation: none; }
+  .progress > span:not(.spark), .thinking.live .tlabel { color: var(--vscode-descriptionForeground); background: none; }
+}
 details > summary::-webkit-details-marker { display: none; }
 .thinking .tbody { white-space: pre-wrap; font-style: italic; color: var(--vscode-descriptionForeground); font-size: .92em; padding: 2px 0 6px 20px; }
 .tool > summary { white-space: nowrap; overflow: hidden; }
@@ -206,21 +222,55 @@ details > summary::-webkit-details-marker { display: none; }
 .ttool .targ { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* files changed (Copilot-style summary with diff + undo) */
-.changes { margin: 6px 0 10px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 6px; overflow: hidden; }
-.chead { padding: 4px 10px; font-size: .9em; font-weight: 600; background: var(--vscode-sideBarSectionHeader-background, var(--vscode-editorWidget-background)); }
-.crow { display: flex; align-items: center; gap: 6px; padding: 2px 6px 2px 10px; }
+.changes {
+  margin: 6px 0 10px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 6px; overflow: hidden;
+  background: var(--vscode-editor-background, var(--vscode-editorWidget-background));
+}
+.chead {
+  display: flex; align-items: center; gap: 6px; padding: 5px 10px; font-size: .9em; font-weight: 600;
+  background: var(--vscode-editorWidget-background); border-bottom: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+}
+.chead .plus, .chead .minus { font-weight: normal; }
+.cfile + .cfile { border-top: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); }
+.crow { display: flex; align-items: center; gap: 5px; padding: 3px 6px 3px 4px; min-height: 22px; }
+.crow.toggle { cursor: pointer; }
 .crow:hover { background: var(--vscode-list-hoverBackground); }
-.crow.undone .cname { text-decoration: line-through; opacity: .6; }
-.cname { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.plus { color: var(--vscode-gitDecoration-addedResourceForeground, #3a3); font-size: .9em; }
-.minus { color: var(--vscode-gitDecoration-deletedResourceForeground, #c33); font-size: .9em; }
+.crow:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.crow .chev { flex: none; width: 16px; display: inline-flex; color: var(--vscode-descriptionForeground); }
+.crow .cicon { flex: none; color: var(--vscode-descriptionForeground); }
+.crow button.icon { opacity: .75; }
+.crow:hover button.icon, .crow button.icon:focus-visible { opacity: 1; }
+.cfile.undone .cname { text-decoration: line-through; opacity: .6; }
+.cname { display: inline-flex; align-items: baseline; gap: 6px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.cname.link { cursor: pointer; }
+.cname.link:hover .cbase { text-decoration: underline; }
+.cbase { font-weight: 600; flex: none; }
+.cdir { font-size: .88em; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; } /* keeps the end of a long path */
+.plus { flex: none; color: var(--vscode-gitDecoration-addedResourceForeground, #3a3); font-size: .9em; font-family: var(--vscode-editor-font-family); }
+.minus { flex: none; color: var(--vscode-gitDecoration-deletedResourceForeground, #c33); font-size: .9em; font-family: var(--vscode-editor-font-family); }
 .spacer { flex: 1; }
-.cdiff > summary { padding: 2px 10px; font-size: .85em; color: var(--vscode-textLink-foreground); }
-.diff { font-family: var(--vscode-editor-font-family); font-size: .85em; max-height: 260px; overflow: auto; white-space: pre; border-top: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); }
-.diff > div { padding: 0 10px; }
-.diff .add { background: var(--vscode-diffEditor-insertedLineBackground, rgba(0,160,0,.18)); }
-.diff .del { background: var(--vscode-diffEditor-removedLineBackground, rgba(220,0,0,.18)); }
-.diff .more { color: var(--vscode-descriptionForeground); font-style: italic; }
+.cfile > .diff { display: none; border-top: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); }
+.cfile.open > .diff { display: block; }
+
+/* a diff: line number, sign and code in columns; rows stretch to the widest line so colours span the scroll */
+.diff { font-family: var(--vscode-editor-font-family); font-size: .85em; line-height: 1.5; max-height: 300px; overflow: auto; }
+.dlines { display: inline-block; min-width: 100%; vertical-align: top; }
+.dl { display: flex; white-space: pre; }
+.dl .ln { flex: none; width: var(--lnw, 3ch); padding: 0 6px 0 8px; text-align: right; user-select: none;
+  color: var(--vscode-editorLineNumber-foreground, var(--vscode-descriptionForeground)); }
+.dl .sg { flex: none; width: 1.4ch; user-select: none; text-align: center; }
+.dl .code { padding-right: 12px; }
+.dl.add { background: var(--vscode-diffEditor-insertedLineBackground, rgba(155,185,85,.2)); }
+.dl.del { background: var(--vscode-diffEditor-removedLineBackground, rgba(255,0,0,.2)); }
+.dl.add .sg { color: var(--vscode-gitDecoration-addedResourceForeground, #3a3); }
+.dl.del .sg { color: var(--vscode-gitDecoration-deletedResourceForeground, #c33); }
+.dl.add .ln { box-shadow: inset 2px 0 var(--vscode-gitDecoration-addedResourceForeground, #3a3); }
+.dl.del .ln { box-shadow: inset 2px 0 var(--vscode-gitDecoration-deletedResourceForeground, #c33); }
+.dsep { padding: 0 10px; text-align: left; color: var(--vscode-descriptionForeground);
+  background: var(--vscode-editorWidget-background, rgba(128,128,128,.08)); user-select: none; }
+.dsep.more { font-style: italic; font-family: var(--vscode-font-family); }
+.confirm > .diff { margin-top: 8px; max-height: 220px; border-radius: 4px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+  background: var(--vscode-editor-background, transparent); }
 
 /* approval card */
 .confirm {
@@ -228,7 +278,8 @@ details > summary::-webkit-details-marker { display: none; }
   border: 1px solid var(--vscode-focusBorder); background: var(--vscode-editorWidget-background);
 }
 .ctitle { display: flex; align-items: center; gap: 6px; font-weight: 600; }
-.cbody { margin: 6px 0 0; white-space: pre-wrap; max-height: 260px; overflow: auto; font-family: var(--vscode-editor-font-family); font-size: .9em; color: var(--vscode-descriptionForeground); }
+.cbody { margin: 6px 0 0; padding: 4px 8px; border-radius: 4px; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto;
+  font-family: var(--vscode-editor-font-family); font-size: .9em; background: var(--vscode-textCodeBlock-background); }
 .cbtns { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .confirm.done { padding: 0; border: none; background: none; }
 .confirm.done .codicon-check { color: var(--vscode-testing-iconPassed, #3a3); }

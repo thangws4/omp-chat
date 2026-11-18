@@ -101,7 +101,7 @@
   function showProgress() {
     if (!busy || progress) return;
     progress = el('div', 'progress');
-    progress.append(icon('loading', 'codicon-modifier-spin'), el('span', '', 'Working…'));
+    progress.append(spark(), el('span', '', 'Working…'));
     body().appendChild(progress);
     scroll();
   }
@@ -194,7 +194,37 @@
   log.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && e.target.matches?.('code[data-file]')) vscode.postMessage({ type: 'openFile', ref: e.target.dataset.file });
   });
-  function endAssistant() { finish(cur); cur = null; curThink = null; }
+  function endAssistant() { finish(cur); cur = null; endThink(); }
+  // Three pixels in OMP's logo colours, hopping in turn, on whatever the agent is doing right now (thinking, working).
+  const spark = () => {
+    const s = el('span', 'spark');
+    s.append(el('i'), el('i'), el('i'));
+    return s;
+  };
+  // "Thinking… 4s" with the mark while it streams, then how long it took, as Claude Code shows it
+  // (a replayed one just says "Thought").
+  function startThink() {
+    clearProgress();
+    curThink = el('details', 'thinking live');
+    curThink._t0 = Date.now();
+    const label = el('span', 'tlabel', 'Thinking…');
+    const s = el('summary');
+    s.append(spark(), label);
+    curThink.appendChild(s);
+    curThink._body = curThink.appendChild(el('div', 'tbody'));
+    curThink._timer = setInterval(() => { label.textContent = `Thinking… ${Math.round((Date.now() - curThink._t0) / 1000)}s`; }, 1000);
+    body().appendChild(curThink);
+    scroll();
+  }
+  function endThink() {
+    if (!curThink) return;
+    clearInterval(curThink._timer);
+    const s = Math.round((Date.now() - curThink._t0) / 1000);
+    curThink.classList.remove('live');
+    curThink.querySelector('.spark').replaceWith(icon('lightbulb'));
+    curThink.querySelector('.tlabel').textContent = s >= 1 ? `Thought for ${s}s` : 'Thought';
+    curThink = null;
+  }
 
   function setBusy(b) {
     busy = b;
@@ -416,45 +446,110 @@
     } catch { return ''; }
   }
 
+  // omp's diff text: "+12|code", "-12|code", " 12|code", and an empty line between hunks.
+  // Lines without a number (a preview built from the tool's arguments) are "+code" / "-code".
+  const DIFF_MAX = 300;
+  function diffView(text) {
+    const rows = String(text || '').replace(/\n$/, '').split('\n');
+    const view = el('div', 'diff'), lines = el('div', 'dlines');
+    const nums = rows.map((r) => /^[ +-]\s*(\d+)\|/.exec(r)?.[1] || '');
+    view.style.setProperty('--lnw', Math.max(...nums.map((n) => n.length), 1) + 'ch');
+    rows.slice(0, DIFF_MAX).forEach((r, i) => {
+      if (!r) { lines.appendChild(el('div', 'dsep', '⋯')); return; }
+      const sign = '+- '.includes(r[0]) ? r[0] : ' ';
+      const code = nums[i] ? r.slice(r.indexOf('|') + 1) : sign === r[0] ? r.slice(1) : r;
+      const row = el('div', 'dl' + (sign === '+' ? ' add' : sign === '-' ? ' del' : ''));
+      row.append(el('span', 'ln', nums[i]), el('span', 'sg', sign === ' ' ? '' : sign === '-' ? '−' : '+'), el('span', 'code', code));
+      lines.appendChild(row);
+    });
+    if (rows.length > DIFF_MAX) lines.appendChild(el('div', 'dsep more', `… ${rows.length - DIFF_MAX} more lines (open the diff)`));
+    view.appendChild(lines);
+    return view;
+  }
+  const diffCounts = (text) => {
+    const rows = String(text || '').split('\n');
+    return { plus: rows.filter((l) => l[0] === '+').length, minus: rows.filter((l) => l[0] === '-').length };
+  };
+  const counts = (box, c) => {
+    if (c.plus) box.appendChild(el('span', 'plus', '+' + c.plus));
+    if (c.minus) box.appendChild(el('span', 'minus', '−' + c.minus));
+  };
+
   function changesBlock(files) {
     const box = el('div', 'changes');
-    box.appendChild(el('div', 'chead', `${files.length} file${files.length > 1 ? 's' : ''} changed`));
-    for (const f of files) {
-      const lines = (f.diff || '').split('\n');
-      const plus = lines.filter((l) => l[0] === '+').length, minus = lines.filter((l) => l[0] === '-').length;
+    const head = el('div', 'chead');
+    const all = files.map((f) => diffCounts(f.diff));
+    head.append(icon('git-compare'), el('span', '', `${files.length} file${files.length > 1 ? 's' : ''} changed`));
+    counts(head, { plus: all.reduce((s, c) => s + c.plus, 0), minus: all.reduce((s, c) => s + c.minus, 0) });
+    box.appendChild(head);
+    // Small changes are shown right away, as Claude Code does; big ones wait for a click.
+    const small = all.reduce((s, c) => s + c.plus + c.minus, 0) <= 24;
+    files.forEach((f, i) => {
+      const file = el('div', 'cfile');
       const row = el('div', 'crow');
+      const chev = el('span', 'chev');
+      if (f.diff) chev.appendChild(icon('chevron-right'));
+      const slash = f.rel.lastIndexOf('/');
       const name = el('span', 'cname');
-      name.append(icon('file'), el('span', '', f.rel));
-      row.appendChild(name);
-      if (plus) row.appendChild(el('span', 'plus', '+' + plus));
-      if (minus) row.appendChild(el('span', 'minus', '−' + minus));
+      name.append(el('span', 'cbase', f.rel.slice(slash + 1)));
+      if (slash > 0) name.appendChild(el('span', 'cdir', f.rel.slice(0, slash)));
+      name.title = f.rel;
+      row.append(chev, icon('file', 'cicon'), name);
+      counts(row, all[i]);
       row.appendChild(el('span', 'spacer'));
       if (f.id) {
+        const review = el('button', 'icon');
+        review.title = 'Review in the editor: accept or reject each change';
+        review.appendChild(icon('go-to-file'));
+        review.onclick = () => vscode.postMessage({ type: 'openEdit', id: f.id });
         const diffBtn = el('button', 'icon');
-        diffBtn.title = 'Open diff';
+        diffBtn.title = 'Open side-by-side diff';
         diffBtn.appendChild(icon('diff'));
         diffBtn.onclick = () => vscode.postMessage({ type: 'openDiff', id: f.id });
-        name.title = 'Review in the editor: accept or reject each change';
-        name.onclick = () => vscode.postMessage({ type: 'openEdit', id: f.id });
         const undo = el('button', 'icon');
         undo.title = 'Undo this change';
         undo.dataset.edit = f.id;
         undo.appendChild(icon('discard'));
         undo.onclick = () => vscode.postMessage({ type: 'revert', id: f.id });
-        row.append(diffBtn, undo);
+        row.append(review, diffBtn, undo);
       }
-      box.appendChild(row);
+      file.appendChild(row);
       if (f.diff) {
-        const det = el('details', 'cdiff');
-        det.appendChild(el('summary', '', 'Show changes'));
-        const pre = el('div', 'diff');
-        for (const line of lines.slice(0, 300)) pre.appendChild(el('div', line[0] === '+' ? 'add' : line[0] === '-' ? 'del' : '', line));
-        if (lines.length > 300) pre.appendChild(el('div', 'more', `… ${lines.length - 300} more lines (open the diff)`));
-        det.appendChild(pre);
-        box.appendChild(det);
+        const view = diffView(f.diff);
+        const toggle = (open) => {
+          file.classList.toggle('open', open);
+          chev.firstChild.className = 'codicon codicon-chevron-' + (open ? 'down' : 'right');
+        };
+        row.classList.add('toggle');
+        row.tabIndex = 0;
+        row.setAttribute('role', 'button');
+        row.onclick = (e) => { if (!e.target.closest('button')) toggle(!file.classList.contains('open')); };
+        row.onkeydown = (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === row) { e.preventDefault(); row.click(); } };
+        file.appendChild(view);
+        toggle(small);
+      } else if (f.id) {
+        name.classList.add('link'); // nothing to unfold: the name opens the review
+        name.onclick = () => vscode.postMessage({ type: 'openEdit', id: f.id });
       }
-    }
+      box.appendChild(file);
+    });
     return box;
+  }
+
+  // What an edit / write is about to change, from the tool's arguments: shown in its approval card.
+  function previewDiff(name, a) {
+    if (!a) return '';
+    const lines = (s) => String(s).replace(/\n$/, '').split('\n');
+    const pairs = Array.isArray(a.edits) ? a.edits : [a];
+    if (name === 'write' && typeof a.content === 'string') return lines(a.content).map((l) => '+' + l).join('\n');
+    if (name !== 'edit') return '';
+    return pairs.filter((e) => typeof e?.old_string === 'string' && typeof e?.new_string === 'string').map((e) => {
+      const o = lines(e.old_string), n = lines(e.new_string);
+      let s = 0, eo = o.length, en = n.length; // trim the lines both sides share
+      while (s < eo && s < en && o[s] === n[s]) s++;
+      while (eo > s && en > s && o[eo - 1] === n[en - 1]) { eo--; en--; }
+      return [...o.slice(s, eo).map((l) => '-' + l), ...n.slice(s, en).map((l) => '+' + l)].join('\n');
+    }).filter(Boolean).join('\n\n');
   }
 
   // Finished tool rows (and the thinking between them) just above a new tool fold into one "Ran N tools"
@@ -490,6 +585,8 @@
     title.append(icon('shield'), el('span', '', head));
     card.appendChild(title);
     if (rest.length) card.appendChild(el('pre', 'cbody', rest.join('\n')));
+    const preview = /^Allow tool:/.test(head) && running?._tool && previewDiff(running._tool.name, running._tool.args);
+    if (preview) card.appendChild(diffView(preview));
     // Text questions from omp ("input" one line, "editor" multi-line) get a box in the card.
     let box = null;
     if (m.input) {
@@ -1600,20 +1697,12 @@
         break;
       }
       case 'text':
-        if (!cur) { clearProgress(); foldTools(body()); cur = add('md'); cur._raw = ''; }
+        if (!cur) { clearProgress(); endThink(); foldTools(body()); cur = add('md'); cur._raw = ''; }
         cur._raw += m.delta;
         renderSoon(cur);
         break;
       case 'thinking':
-        if (!curThink) {
-          clearProgress();
-          curThink = el('details', 'thinking');
-          const s = el('summary');
-          s.append(icon('lightbulb'), el('span', '', 'Thinking'));
-          curThink.appendChild(s);
-          curThink._body = curThink.appendChild(el('div', 'tbody'));
-          body().appendChild(curThink);
-        }
+        if (!curThink) startThink();
         curThink._body.textContent += m.delta;
         break;
       case 'assistant_done': endAssistant(); showProgress(); break;
@@ -1622,6 +1711,7 @@
         clearProgress();
         foldTools(body());
         const d = el('details', 'tool running');
+        d._tool = { name: m.name, args: m.args }; // an approval card for it shows what it will change
         const s = el('summary');
         let detail = String(toolDetail(m.args) || '');
         d._verbs = VERBS[m.name] || [m.name, m.name];
@@ -1705,7 +1795,7 @@
         if (b) {
           b.disabled = true;
           b.title = 'Undone';
-          b.closest('.crow')?.classList.add('undone');
+          b.closest('.cfile')?.classList.add('undone');
         }
         break;
       }
@@ -1745,7 +1835,8 @@
         for (const n of [...log.querySelectorAll('.turn')]) n.remove();
         welcome.hidden = false;
         scroll(true);
-        turn = null; cur = null; curThink = null; progress = null;
+        endThink(); // stops its timer
+        turn = null; cur = null; progress = null;
         tools.clear(); dialogs.clear(); toolRows.clear(); subCards.clear(); subData.clear(); barDismissed = new Set();
         renderAgentsBar();
         $('queue').textContent = ''; $('queue').hidden = true;
