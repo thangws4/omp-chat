@@ -1210,7 +1210,7 @@
   const money = (n) => '$' + (+n || 0).toFixed(+n && +n < 1 ? 4 : 2);
   function bar(frac) {
     const b = el('div', 'bar');
-    const f = el('div', 'fill' + (frac >= 0.8 ? ' warn' : ''));
+    const f = el('div', 'fill ' + level(frac));
     f.style.width = Math.round(Math.min(1, Math.max(0, frac)) * 100) + '%';
     b.appendChild(f);
     return b;
@@ -1228,10 +1228,35 @@
   }
   // OpenCode Go style plan windows: { rolling|weekly|monthly: { status, percent, resetsAt } }
   const WINDOWS = [['rolling', '5 hours'], ['weekly', 'Week'], ['monthly', 'Month']];
+  // A plan window: its name and how full it is, a thick bar coloured by level, and when it resets.
   function windowLine(sec, label, w) {
     if (!w) return;
     const limited = w.status === 'rate-limited';
-    line(sec, label, bar(limited ? 1 : w.percent / 100), `${limited ? 'limit reached' : w.percent + '%'} · ${resetsIn(w.resetsAt)}`);
+    const r = el('div', 'uwin');
+    const head = el('div', 'uwhead');
+    head.append(el('span', 'uwlabel', label), el('span', 'spacer'), el('span', 'uwpct ' + level(limited ? 1 : w.percent / 100), limited ? 'limit reached' : w.percent + '%'));
+    r.append(head, bar(limited ? 1 : w.percent / 100), el('div', 'uwsub', resetsIn(w.resetsAt)));
+    sec.appendChild(r);
+  }
+  const level = (frac) => (frac >= 0.9 ? 'full' : frac >= 0.75 ? 'warn' : 'ok');
+  // A big number with its name and a detail line, for "This chat".
+  function tile(grid, value, label, sub, extra) {
+    const t = el('div', 'utile');
+    const v = el('div', 'utval', value);
+    if (extra) v.prepend(extra);
+    t.append(v, el('div', 'utlabel', label));
+    if (sub) t.appendChild(el('div', 'utsub', sub));
+    t.title = [value, label, sub].filter(Boolean).join('\n'); // the detail line can be cut short in a narrow tile
+    grid.appendChild(t);
+  }
+  // Short limit badges for a key in the list: "5h 37%", "week 84%", "full".
+  function keyBadges(a) {
+    const out = [];
+    const w = a?.windows;
+    if (w?.rolling) out.push([w.rolling.status === 'rate-limited' ? '5h full' : `5h ${w.rolling.percent}%`, level(w.rolling.status === 'rate-limited' ? 1 : w.rolling.percent / 100)]);
+    if (w?.weekly) out.push([`week ${w.weekly.percent ?? '?'}%`, level((w.weekly.percent ?? 0) / 100)]);
+    if (!out.length && keySummary(a)) out.push([keySummary(a), a?.error ? 'full' : '']);
+    return out.map(([text, lvl]) => el('span', 'ubadge ' + lvl, text));
   }
   // One-line summary of a key's limits, for the key list.
   function keySummary(a) {
@@ -1289,18 +1314,22 @@
 
   function showUsage(m) {
     const panel = openSheet('Usage & limits', 'graph', () => vscode.postMessage({ type: 'usage' }));
+    panel.classList.add('usage');
 
     const s = m.stats;
     const chat = section(panel, 'This chat');
     if (s) {
-      const n = (k, word) => `${k} ${word}${k === 1 ? '' : 's'}`;
-      line(chat, 'Requests', `${n(s.assistantMessages, 'model call')} · ${n(s.toolCalls, 'tool call')}`);
-      line(chat, 'Tokens', `${num(s.tokens.input)} in · ${num(s.tokens.output)} out · ${num(s.tokens.cacheRead)} cached`);
-      line(chat, 'Cost', money(s.cost) + (/:free$/.test(m.model || '') ? ' (free model)' : ''));
+      const grid = el('div', 'utiles');
+      const t = s.tokens, cachedPct = t.input ? Math.round((t.cacheRead / (t.input + t.cacheRead)) * 100) : 0;
+      tile(grid, money(s.cost), 'Cost', /:free$/.test(m.model || '') ? 'free model' : '');
+      tile(grid, num(t.input + t.output), 'Tokens', `${num(t.input)} in · ${num(t.output)} out${t.cacheRead ? ` · ${cachedPct}% cached` : ''}`);
+      tile(grid, String(s.assistantMessages), 'Model calls', `${s.toolCalls} tool call${s.toolCalls === 1 ? '' : 's'}`);
       if (s.contextUsage) {
-        const c = s.contextUsage;
-        line(chat, 'Context', bar(c.percent / 100), `${Math.round(c.percent)}% of ${num(c.contextWindow)}`);
+        const c = s.contextUsage, ring = el('span', 'ring big ' + level(c.percent / 100));
+        ring.style.setProperty('--p', Math.min(100, Math.round(c.percent)));
+        tile(grid, `${Math.round(c.percent)}%`, 'Context', `of ${num(c.contextWindow)} tokens`, ring);
       }
+      chat.appendChild(grid);
     } else note(chat, 'No statistics yet.');
 
     const a = m.account;
@@ -1339,17 +1368,26 @@
     // Saved keys of this provider: see which one has room left and switch with one click.
     if (m.keyGroup) {
       const ks = section(panel, `API keys · ${m.keyGroup}`);
-      for (const k of m.keys || []) {
+      const card = el('div', 'kcard');
+      for (const k of m.keys || []) { // as in the API keys sheet: click a key to switch to it
         const r = el('div', 'krow' + (k.active ? ' active' : ''));
-        r.append(icon(k.active ? 'check' : 'key'), el('span', 'klabel', k.label), el('span', 'kmask', k.mask), el('span', 'ksum', keySummary(k.account)), el('span', 'spacer'));
-        if (!k.active) {
-          const use = el('button', 'secondary', 'Use');
-          use.title = 'Switch to this key (the conversation continues)';
-          use.onclick = () => { use.disabled = true; vscode.postMessage({ type: 'useKey', env: k.env, id: k.id }); };
-          r.appendChild(use);
+        const text = el('div', 'ktext'), lineEl = el('div', 'kline');
+        lineEl.append(el('span', 'klabel', k.label), el('span', 'kmask', k.mask));
+        const badges = el('div', 'kbadges');
+        badges.append(...keyBadges(k.account));
+        text.append(lineEl, badges);
+        r.append(icon(k.active ? 'pass-filled' : 'circle-large-outline', 'kradio'), text);
+        if (k.active) lineEl.appendChild(el('span', 'kuse', 'in use'));
+        else {
+          r.classList.add('pick');
+          r.tabIndex = 0;
+          r.title = 'Switch to this key (the conversation continues)';
+          r.onclick = () => { r.classList.add('busy'); vscode.postMessage({ type: 'useKey', env: k.env, id: k.id }); };
+          r.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); r.click(); } };
         }
-        ks.appendChild(r);
+        card.appendChild(r);
       }
+      if (m.keys?.length) ks.appendChild(card);
       if (!m.keys?.length) note(ks, 'No key saved for this provider.');
       const manage = el('button', 'secondary', m.keys?.length ? 'Add or manage keys…' : 'Add key…');
       manage.onclick = () => vscode.postMessage({ type: 'setApiKey' });

@@ -338,12 +338,12 @@ Open it with the 📊 button in the title bar or the context ring in the toolbar
 
 | Section | Shows |
 |---|---|
-| This chat | Model calls, tool calls, tokens (in / out / cached), cost, context window fill |
-| OpenCode Go plan | 5-hour, weekly and monthly usage with the time until each resets |
+| This chat | Four tiles: cost, tokens (in / out / share served from cache), model and tool calls, and how full the context window is |
+| OpenCode Go plan | 5-hour, weekly and monthly usage, each with a bar that turns yellow from 75% and red from 90% or when the limit is reached, and the time until it resets |
 | Today (UTC) | OpenRouter free-model requests used out of your daily quota |
 | OpenRouter account | Credits used today / this month / in total, key limit |
 | DeepSeek account | Balance |
-| API keys | Every saved key of the current provider with its own usage, and a **Use** button |
+| API keys | Every saved key of the current provider with its limits as badges (red when full); click a key to switch to it |
 
 Account figures need the key saved in OMP Chat (keys that only omp knows about cannot be read).
 

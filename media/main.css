@@ -342,12 +342,12 @@ details > summary::-webkit-details-marker { display: none; }
 .khead { display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 10px; font-weight: 600;
   background: var(--vscode-editorWidget-background); border-bottom: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); }
 .kcount { font-size: .8em; font-weight: normal; padding: 0 6px; border-radius: 8px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
-#sheet.keys .krow { gap: 8px; padding: 6px 6px 6px 10px; }
-#sheet.keys .krow + .krow { border-top: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); }
-#sheet.keys .krow.pick { cursor: pointer; }
-#sheet.keys .krow.pick:hover { background: var(--vscode-list-hoverBackground); }
-#sheet.keys .krow:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
-#sheet.keys .krow.busy { opacity: .6; pointer-events: none; }
+:is(#sheet.keys, #sheet.usage) .krow { gap: 8px; padding: 6px 6px 6px 10px; }
+:is(#sheet.keys, #sheet.usage) .krow + .krow { border-top: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); }
+:is(#sheet.keys, #sheet.usage) .krow.pick { cursor: pointer; }
+:is(#sheet.keys, #sheet.usage) .krow.pick:hover { background: var(--vscode-list-hoverBackground); }
+:is(#sheet.keys, #sheet.usage) .krow:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+:is(#sheet.keys, #sheet.usage) .krow.busy { opacity: .6; pointer-events: none; }
 .kradio { flex: none; color: var(--vscode-descriptionForeground); }
 .krow.active .kradio { color: var(--vscode-testing-iconPassed, #3a3); }
 .ktext { flex: 1; min-width: 0; }
@@ -437,6 +437,33 @@ textarea.cinput { font-family: var(--vscode-editor-font-family); }
 .bar .fill { height: 100%; background: var(--vscode-progressBar-background, var(--vscode-button-background)); }
 .bar .fill.warn, #meter.warn { color: var(--vscode-editorWarning-foreground); }
 .bar .fill.warn { background: var(--vscode-editorWarning-foreground, #cca700); }
+.bar .fill.full { background: var(--vscode-errorForeground, #e5534b); }
+/* Usage & limits: big numbers for this chat, a thick bar per plan window, keys as in the API keys sheet */
+#sheet.usage { max-height: 75%; }
+.utiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 6px; margin-top: 4px; }
+.utile { padding: 8px 10px; border-radius: 8px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+  background: var(--vscode-editor-background, transparent); min-width: 0; }
+.utval { display: flex; align-items: center; gap: 6px; font-size: 1.35em; font-weight: 600; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.utlabel { font-size: .85em; color: var(--vscode-descriptionForeground); margin-top: 2px; }
+.utsub { font-size: .8em; color: var(--vscode-descriptionForeground); opacity: .85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ring.big { width: 18px; height: 18px; -webkit-mask: radial-gradient(circle, transparent 5px, #000 5.5px); mask: radial-gradient(circle, transparent 5px, #000 5.5px); }
+.ring.warn { background: conic-gradient(var(--vscode-editorWarning-foreground, #cca700) calc(var(--p) * 1%), var(--vscode-widget-border, rgba(128,128,128,.35)) 0); }
+.ring.full { background: conic-gradient(var(--vscode-errorForeground, #e5534b) calc(var(--p) * 1%), var(--vscode-widget-border, rgba(128,128,128,.35)) 0); }
+.uwin { padding: 6px 0 4px; }
+.uwin + .uwin { border-top: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); }
+.uwhead { display: flex; align-items: baseline; gap: 6px; }
+.uwlabel { font-weight: 600; }
+.uwpct { font-weight: 600; font-variant-numeric: tabular-nums; }
+.uwpct.warn { color: var(--vscode-editorWarning-foreground, #cca700); }
+.uwpct.full { color: var(--vscode-errorForeground, #e5534b); }
+.uwin .bar { max-width: none; height: 8px; border-radius: 4px; margin: 4px 0 3px; }
+.uwsub { font-size: .85em; color: var(--vscode-descriptionForeground); }
+.kbadges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.ubadge { font-size: .8em; padding: 0 6px; border-radius: 8px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+  color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; }
+.ubadge.warn { color: var(--vscode-editorWarning-foreground, #cca700); border-color: currentColor; }
+.ubadge.full { color: var(--vscode-errorForeground, #e5534b); border-color: currentColor; }
+#sheet.usage .kcard { margin-top: 4px; }
 
 /* ---- queued messages and the agent's todo list, pinned above the input ---- */
 #queue, #todos {
