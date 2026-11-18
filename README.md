@@ -147,13 +147,13 @@ A message sent while the agent is working is **queued**: it waits above the box,
 
 When the agent keeps a to-do list, it is pinned above the box (**Todos 2/5**): ✓ done, ⟳ in progress, ○ to do. Click the header to fold it.
 
-The bar under the box is laid out like Claude Code's: on the left the approval mode and the open file; on the right the context ring, the model with its effort (`deepseek-v4-flash · high`), `/` for commands, `@` to mention a file, and send. In a narrow sidebar the labels fold into icons; their tooltips still say everything.
+What goes with your message sits in a row at the top of the box: **Add context** (`@`), the open file and any pinned files. The bar under the text has the approval mode on the left; on the right the context ring (with a percentage once it is half full), the model with its effort (`deepseek-v4-flash · high`), `/` for commands, images, and send. In a narrow sidebar the labels fold into icons; their tooltips still say everything.
 
 | In the message box | What it does |
 |---|---|
-| 👁 file name in the bar | The open file is sent with your message. With a selection, it shows the line range and the selected code is sent. Click to leave the file out (struck through) or put it back; a newly opened file is included again |
+| 👁 file name at the top of the box | The open file is sent with your message. With a selection, it shows the line range and the selected code is sent. Click to leave the file out (struck through) or put it back; a newly opened file is included again |
 | 📌 next to the file name (on hover) | Keeps that file attached to every message, even after you switch files. Pinned files show as their own chips; ✕ removes one. Also: right-click a file in the Explorer (or an editor tab) → **Add File to OMP Chat** |
-| `@` | Lists workspace files as you type (`@cal…`). **↑ ↓** to move, **Enter** or **Tab** to insert, **Esc** to close. The `@` button does the same |
+| `@` | Lists workspace files as you type (`@cal…`). **↑ ↓** to move, **Enter** or **Tab** to insert, **Esc** to close. **Add context** does the same |
 | `@problems` | Sends the errors and warnings from VS Code's **Problems** panel |
 | `@terminal` | Sends the recent output of the active terminal (copied through the clipboard, which is put back afterwards) |
 | `@git` | Sends what you have not committed yet: `git status` and the diff against `HEAD` |

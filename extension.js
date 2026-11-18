@@ -2249,21 +2249,23 @@ class ChatProvider {
   <div id="todos" hidden></div>
   <div id="queue" hidden></div>
   <div id="box">
-    <div id="ctx" hidden><span id="pinned"></span></div>
+    <!-- What goes with the message, in one row: add more (@), the open file (eye: sent or not), pinned files. -->
+    <div id="ctx">
+      <button id="attach" class="chip addctx" title="Mention a file, folder, @git, @problems… (@)"><span class="codicon codicon-mention"></span><span class="plabel">Add context</span></button>
+      <span id="ctxChip" class="chip" hidden><button id="ctxEye"><span id="ctxIcon" class="codicon codicon-eye"></span><span id="ctxLabel" class="plabel"></span></button><button id="ctxPin" class="ctxx" title="Keep this file attached to every message"><span class="codicon codicon-pin"></span></button></span>
+      <span id="pinned"></span>
+    </div>
     <div id="thumbs" hidden></div>
     <div id="shellHint" hidden><span class="codicon codicon-terminal"></span>Shell command: runs in the workspace, and the output joins the conversation</div>
     <div id="memHint" hidden><span class="codicon codicon-bookmark"></span>Memory: saved to the project's AGENTS.md, so the agent remembers it in every chat</div>
-    <textarea id="input" rows="1" placeholder="Ask OMP, / for commands, ! to run a shell command"></textarea>
-    <!-- Laid out like Claude Code's prompt box: mode and the open file on the left; context, model · effort,
-         commands, mentions and send on the right. -->
+    <textarea id="input" rows="1" placeholder="Ask OMP… / for commands, @ for files"></textarea>
+    <!-- mode on the left; context, model · effort, commands, images and send on the right -->
     <div id="tools">
       <button id="mode" class="pill" title="When OMP must ask before running tools (Shift+Tab)" aria-haspopup="listbox"><span id="modeIcon" class="codicon codicon-shield"></span><span id="modeLabel" class="plabel"></span></button>
-      <span id="ctxChip" hidden><button id="ctxEye" class="pill"><span id="ctxIcon" class="codicon codicon-eye"></span><span id="ctxLabel" class="plabel"></span></button><button id="ctxPin" class="icon" title="Keep this file attached to every message"><span class="codicon codicon-pin"></span></button></span>
       <span class="spacer"></span>
       <button id="meter" class="pill" title="Usage &amp; limits" hidden><span id="ring" class="ring"></span><span id="meterText"></span></button>
       <button id="model" class="pill" title="Model and effort" aria-haspopup="listbox"><span id="modelName"></span><span id="effort"></span></button>
       <button id="slash" class="icon" title="Commands (/)"><span class="glyph">/</span></button>
-      <button id="attach" class="icon" title="Mention a file (@)"><span class="codicon codicon-mention"></span></button>
       <button id="addImage" class="icon" title="Attach images (or paste / drop them)"><span class="codicon codicon-file-media"></span></button>
       <input id="imageFile" type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
       <button id="stop" class="icon send" hidden title="Stop (the agent keeps what it did so far)"><span class="codicon codicon-primitive-square"></span></button>

@@ -8,7 +8,7 @@
   catch (e) { console.error('l10n', e); }
   const log = $('log'), welcome = $('welcome'), input = $('input'), popup = $('popup');
   const sendBtn = $('send'), stopBtn = $('stop'), modelBtn = $('model'), modeBtn = $('mode');
-  const ctxBox = $('ctx'), ctxLabel = $('ctxLabel'), ctxIcon = $('ctxIcon'), ctxEye = $('ctxEye');
+  const ctxLabel = $('ctxLabel'), ctxIcon = $('ctxIcon'), ctxEye = $('ctxEye');
 
   let turn = null;     // current assistant turn (everything until the next user message)
   let cur = null;      // assistant markdown being streamed
@@ -1169,6 +1169,7 @@
     ring.hidden = !m.context;
     if (m.context) {
       ring.style.setProperty('--p', Math.min(100, Math.round(m.context.percent)));
+      if (m.context.percent >= 50) parts.unshift(`${Math.round(m.context.percent)}%`); // worth a number once it fills up
       tip.unshift(`Context: ${Math.round(m.context.percent)}% (${num(m.context.tokens)} of ${num(m.context.contextWindow)} tokens)`);
     }
     if (m.free) {
@@ -1472,14 +1473,13 @@
   }
   function setContextOn(on) {
     useContext = on;
-    // The open file in the toolbar, like Claude Code's footer: the eye says whether it goes with your message
+    // The open file, first among what goes with the message: the eye says whether it is sent
     // (click to toggle; a newly opened file is included again). Hidden when it is pinned anyway.
     $('ctxChip').hidden = !contextLabel || pinned.some((p) => p.rel === contextRel);
     $('ctxChip').classList.toggle('off', !on);
     ctxIcon.className = 'codicon codicon-' + (on ? 'eye' : 'eye-closed');
     ctxEye.title = `${contextFull || contextLabel || ''}\n${on ? 'Sent with your next message. Click to leave it out.' : 'Not sent. Click to include it.'}`;
     ctxEye.setAttribute('aria-pressed', String(on));
-    ctxBox.hidden = !pinned.length;
   }
   function renderPinned() {
     const box = $('pinned');
