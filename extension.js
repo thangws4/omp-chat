@@ -8,6 +8,7 @@ const { spawnSync } = require('child_process');
 const { OmpClient } = require('./omp-client');
 const keys = require('./keys');
 const plugins = require('./plugins');
+const review = require('./review');
 const l10n = require('./media/l10n');
 const { PROVIDERS } = keys;
 
@@ -100,8 +101,16 @@ const windowFocused = () => vscode.window.state?.focused !== false;
 const git = (args, cwd) => new Promise((resolve, reject) => require('child_process').execFile('git', args, { cwd, timeout: 60000 },
   (e, out, err) => (e ? reject(new Error(String(err || e.message).trim())) : resolve(String(out).trim()))));
 // Prepended to each message in plan mode; edits and commands are also denied at approval time.
-const PLAN_NOTE = '[Plan mode: investigate with read-only tools and reply with a concrete, numbered plan for the change. '
+// The plan comes as numbered tasks with their files and dependencies, so it can also be split across subagents.
+const PLAN_NOTE = '[Plan mode: investigate with read-only tools and reply with a concrete plan for the change, as numbered tasks. '
+  + 'For each task give what to do, the files it touches, how to check it, how hard it is, and which other tasks it depends on. '
   + 'Do not edit files or run commands; such requests will be denied. The user will approve the plan before you carry it out.]';
+// "Split across subagents" on the plan card: the main agent becomes the lead and hands each task to a subagent.
+const DELEGATE_PLAN = 'Carry out the plan above by delegating it. Give each numbered task to its own subagent with your task tool, '
+  + 'with a self-contained brief: the goal, the files it may change, constraints, and how to verify it. '
+  + 'Run tasks that do not depend on each other in parallel; a task that depends on another, or changes the same files, runs after it. '
+  + 'When they are done, review their changes together, fix conflicts or gaps yourself, run the relevant checks or tests, '
+  + 'and finish with a short summary per task.';
 const USAGE_DAY = 'ompChat.usageDay';       // globalState: model requests sent from this extension today (UTC)
 const utcDay = () => new Date().toISOString().slice(0, 10); // OpenRouter's free-model quota resets at 00:00 UTC
 
@@ -405,7 +414,7 @@ class ChatProvider {
       sessionFile: p.sessionFile || s.sessionFile, task: summaryLine(task) || s.task || '', status: prog?.status || LIFE[p.status] || s.status || 'running',
     });
     if (prog) {
-      Object.assign(s, { intent: prog.lastIntent || s.intent, tool: prog.currentTool, toolArgs: prog.currentToolArgs,
+      Object.assign(s, { intent: prog.lastIntent || s.intent, model: prog.resolvedModel || s.model, tool: prog.currentTool, toolArgs: prog.currentToolArgs,
         tools: prog.toolCount, tokens: prog.tokens, ms: prog.durationMs, cost: prog.cost });
     }
     this.subagents.set(id, s);
@@ -606,7 +615,7 @@ class ChatProvider {
       case 'rewind': return this.rewind(m.turn, !!m.restoreCode);
       case 'promoteQueued': return this.promoteQueued(m.qid);
       case 'removeQueued': return this.removeQueued(m.qid);
-      case 'executePlan': return this.executePlan(m.mode);
+      case 'executePlan': return this.executePlan(m.mode, !!m.delegate);
       case 'plugins': return this.showPlugins(m.refresh);
       case 'runInTerminal': return this.runInTerminal(m.command);
       case 'subagentView': return this.subagentTranscript(m.id);
@@ -647,6 +656,7 @@ class ChatProvider {
       case 'setMode':
         return vscode.workspace.getConfiguration('ompChat').update('approvalMode', m.mode, vscode.ConfigurationTarget.Global);
       case 'openDiff': return this.openDiff(m.id);
+      case 'openEdit': return this.edits.has(m.id) && vscode.window.showTextDocument(vscode.Uri.file(this.edits.get(m.id).path), { preview: false });
       case 'revert': return this.revert(m.id);
     }
   }
@@ -845,7 +855,8 @@ class ChatProvider {
     let files = [];
     try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => path.join(dir, f)); } catch {}
     const list = files
-      .map((file) => ({ file, mtime: fs.statSync(file).mtimeMs }))
+      .map((file) => { try { return { file, mtime: fs.statSync(file).mtimeMs }; } catch { return null; } }) // deleted meanwhile
+      .filter(Boolean)
       .sort((a, b) => b.mtime - a.mtime)
       .slice(0, 100)
       .map(({ file, mtime }) => {
@@ -858,6 +869,7 @@ class ChatProvider {
   }
 
   async openSession(file) {
+    if (!this.sessionFileOk(file)) return;
     const client = await this.ensureClient();
     this.closeDialogs();
     this.busy = false;
@@ -1157,8 +1169,9 @@ class ChatProvider {
   }
 
   // Leave plan mode for `mode` (omp respawns on the same conversation), then ask the agent to carry out the plan.
-  async executePlan(mode) {
-    this.afterRestart = () => this.send('Go ahead and implement the plan above.', false);
+  async executePlan(mode, delegate) {
+    // After the restart, so the overlay (and the model pool in the prompt) are the fresh ones.
+    this.afterRestart = () => this.send(delegate ? this.delegatePrompt() : 'Go ahead and implement the plan above.', false);
     await vscode.workspace.getConfiguration('ompChat').update('approvalMode', mode, vscode.ConfigurationTarget.Global);
   }
 
@@ -1168,19 +1181,51 @@ class ChatProvider {
   disabledSkills() { return this.context.workspaceState?.get('ompChat.disabledSkills') || []; }
   autoSkills() { return this.context.workspaceState?.get('ompChat.autoSkills') ?? true; }
 
+  // The models subagents may run on: the one in use plus your models (★), as the lead can only pick models the
+  // operator named (omp's task.perCallModel). Snapshotted at each start, so the prompt and omp agree.
+  taskModelPool() {
+    const cur = String(vscode.workspace.getConfiguration('ompChat').get('model') || '');
+    return [...new Set([cur, ...this.favoriteModels()].filter(Boolean))].slice(0, 8);
+  }
+
   overlayArgs() {
     const off = this.disabledSkills();
+    const pool = this.taskPool = this.taskModelPool();
     const dir = (this.context.storageUri || this.context.globalStorageUri)?.fsPath;
-    if (!off.length || !dir) return [];
+    if ((!off.length && pool.length < 2) || !dir) return [];
+    const overlay = {}; // JSON is valid YAML
+    if (off.length) overlay.disabledExtensions = off.map((n) => 'skill:' + n);
+    if (pool.length > 1) {
+      // Roles configured outside project settings are what omp lets a task's `model` pick; ours do not touch
+      // omp's own roles (smol, slow…).
+      overlay.task = { perCallModel: 'on' };
+      overlay.modelRoles = Object.fromEntries(pool.map((id, i) => [`ompchat${i + 1}`, id]));
+    }
     try {
       fs.mkdirSync(dir, { recursive: true });
       const file = path.join(dir, 'omp-overlay.yml');
-      fs.writeFileSync(file, plugins.overlayYaml(off));
+      fs.writeFileSync(file, JSON.stringify(overlay, null, 2) + '\n');
       return ['--config', file];
     } catch (e) {
-      this.post({ type: 'error', text: `Could not apply the plugin choices: ${e.message}` });
+      this.post({ type: 'error', text: `Could not write omp's settings overlay: ${e.message}` });
       return [];
     }
+  }
+
+  // "Split across subagents", told which models it may hand tasks to.
+  delegatePrompt() {
+    const pool = this.taskPool || [];
+    if (pool.length < 2) return DELEGATE_PLAN;
+    const info = new Map((this.modelsCache || []).map((m) => [m.id, m]));
+    const line = (id, i) => {
+      const m = info.get(id);
+      const tags = [i === 0 && 'the current model', m?.free && 'free', m?.plan && 'subscription plan'].filter(Boolean);
+      return `- ${id}${m?.name ? ` (${m.name})` : ''}${tags.length ? ` — ${tags.join(', ')}` : ''}`;
+    };
+    return `${DELEGATE_PLAN}\n\nPick the model for each task with the task item's \`model\` field (exact id, optionally with \`:low\`, \`:medium\` or \`:high\` `
+      + `for its thinking effort), choosing from these models the user approved:\n${pool.map(line).join('\n')}\n`
+      + 'Match the model to the task: the strongest for design, tricky debugging or changes across many files; a faster or cheaper one '
+      + 'for search, renames, docs, tests to fill in or small edits. In the summary, say which model did each task.';
   }
 
   // Every skill omp can load here (`omp skill list --json`, run in the workspace), cached per session.
@@ -1597,6 +1642,7 @@ class ChatProvider {
       const canDiff = typeof f.oldText === 'string' && typeof f.newText === 'string';
       const id = canDiff ? String(++this.editSeq) : null;
       if (id) this.edits.set(id, { path: f.path, oldText: f.oldText, newText: f.newText, created: f.op === 'create', turn: this.turnSeq });
+      if (id && !this.replaying) review.track(f.path, f.oldText, f.op === 'create', this);
       return { id, rel: vscode.workspace.asRelativePath(f.path), diff: (f.diff || '').slice(0, 20000) };
     });
   }
@@ -1891,7 +1937,7 @@ class ChatProvider {
       .map((i) => ({ type: 'image', mimeType: i.mimeType, data: i.data }));
     if (!text && !images.length) return;
     if (!text) text = 'See the attached image.';
-    const client = await this.ensureClient();
+    let client = await this.ensureClient();
     if (!client) { this.post({ type: 'idle' }); return; }
     if (/^!\s*\S/.test(text)) return this.runShell(text.replace(/^!\s*/, ''));
     if (/^#(?!#)\s*\S/.test(text) && !text.includes('\n')) return this.remember(text.replace(/^#\s*/, '')); // one line only
@@ -1915,6 +1961,8 @@ class ChatProvider {
       this.notes = [];
     }
     const shown = { text, context: [ctx?.label, ...pinned].filter(Boolean).map(shortLabel), images: images.map((i) => `data:${i.mimeType};base64,${i.data}`) };
+    // The awaits above (skill list, terminal copy) can outlast a restart: send to the omp running now.
+    client = this.client || await this.ensureClient();
     if (this.busy && !isCommand) {
       // The agent is working: omp holds this until the turn allows it. Shown as "Queued" until delivered.
       const qid = 'q' + ++this.qSeq;
@@ -2171,6 +2219,7 @@ function activate(context) {
     statusItem.command = 'ompChat.attention';
     context.subscriptions.push(statusItem);
   }
+  review.register(context, (s) => provider.t(s));
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider('ompChat.view', provider, {
       webviewOptions: { retainContextWhenHidden: true },

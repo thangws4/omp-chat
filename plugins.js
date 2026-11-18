@@ -25,9 +25,6 @@ function groupSkills(skills, cwd) {
   return [...groups.values()].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
 }
 
-// omp config overlay that hides the given skills for this run (`omp --config <file>`).
-const overlayYaml = (disabled) => `disabledExtensions:\n${disabled.map((n) => `  - ${JSON.stringify('skill:' + n)}`).join('\n')}\n`;
-
 // ---- auto-pick ----
 // ponytail: keyword overlap, not semantics. Skill descriptions are English, so common Vietnamese intents
 // are mapped to English words first. Upgrade path: ask the model to choose (costs one request per message).
@@ -75,4 +72,4 @@ function pickRelevant(message, skills, max = 3) {
 const HINT_PREFIX = '[Skills that may help with this request';
 const skillHint = (picked) => `${HINT_PREFIX}: ${picked.map((s) => `skill://${s.name}`).join(', ')}. Read the ones that fit before starting.]`;
 
-module.exports = { pluginOf, groupSkills, overlayYaml, pickRelevant, skillHint, HINT_PREFIX };
+module.exports = { pluginOf, groupSkills, pickRelevant, skillHint, HINT_PREFIX };

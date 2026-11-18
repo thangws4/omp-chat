@@ -310,7 +310,10 @@
     c.className = 'subagent ' + m.status;
     const [ic, mod] = SUB_ICON[m.status] || SUB_ICON.running;
     c._head.textContent = '';
-    c._head.append(icon(ic, mod), el('span', 'sagent', m.agent || 'agent'), el('span', 'sname', m.id), el('span', 'spacer'),
+    // the model it runs on, when the lead picked one for this task ("deepseek-v4-pro:high")
+    const smodel = m.model ? el('span', 'smodel', m.model.split('/').pop()) : null;
+    if (smodel) smodel.title = m.model;
+    c._head.append(icon(ic, mod), el('span', 'sagent', m.agent || 'agent'), el('span', 'sname', m.id), ...(smodel ? [smodel] : []), el('span', 'spacer'),
       el('span', 'smeta', [m.ms ? secs(m.ms) : '', m.tools ? `${m.tools} tool${m.tools > 1 ? 's' : ''}` : ''].filter(Boolean).join(' · ')));
     const btn = (iconName, title, onclick) => {
       const b = el('button', 'icon');
@@ -431,7 +434,8 @@
         diffBtn.title = 'Open diff';
         diffBtn.appendChild(icon('diff'));
         diffBtn.onclick = () => vscode.postMessage({ type: 'openDiff', id: f.id });
-        name.onclick = diffBtn.onclick;
+        name.title = 'Review in the editor: accept or reject each change';
+        name.onclick = () => vscode.postMessage({ type: 'openEdit', id: f.id });
         const undo = el('button', 'icon');
         undo.title = 'Undo this change';
         undo.dataset.edit = f.id;
@@ -576,18 +580,22 @@
     card.appendChild(title);
     card.appendChild(el('div', 'unote', 'Plan mode is read-only. Approving switches modes and asks the agent to implement the plan, in this conversation.'));
     const btns = el('div', 'cbtns');
-    const choose = (label, mode, cls) => {
+    const choose = (label, mode, cls, delegate, tip) => {
       const b = el('button', cls, label);
+      if (tip) b.title = tip;
       b.onclick = () => {
         card.className = 'confirm done';
         card.textContent = '';
         card.append(icon(mode ? 'check' : 'edit'), el('span', '', mode ? `Plan approved — ${label}` : 'Kept planning'));
-        if (mode) vscode.postMessage({ type: 'executePlan', mode });
+        if (mode) vscode.postMessage({ type: 'executePlan', mode, delegate });
         else input.focus();
       };
       return b;
     };
+    // Subagents work in parallel, so their edits are auto-approved (commands still ask).
     btns.append(choose('Execute, ask before edits', 'always-ask', 'primary'), choose('Execute, auto-approve edits', 'write', 'secondary'),
+      choose('Split across subagents', 'write', 'secondary', true,
+        'Each task goes to its own subagent, on the model that suits it (from your models ★); independent tasks run in parallel, then the agent reviews, tests and sums up. Edits are auto-approved, commands still ask.'),
       choose('Keep planning', null, 'secondary'));
     card.appendChild(btns);
   }

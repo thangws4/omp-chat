@@ -108,6 +108,45 @@ const { chats, openTab, closeWorktree, newWorktreeChat } = require('../extension
   pct = 90; await provider.refreshMeter();
   assert.strictEqual(warnings(), 2);
 
+  // ---- plan → split across subagents, each task on a model that suits it ----
+  const vsStub = require('vscode');
+  const getCfg = vsStub.workspace.getConfiguration;
+  const cfgSet = { model: 'deepseek/deepseek-v4-flash' };
+  vsStub.ConfigurationTarget = { Global: 1 };
+  vsStub.workspace.getConfiguration = () => ({ get: (k, d) => cfgSet[k] ?? d, update: async (k, v) => { cfgSet[k] = v; } });
+  // no models of yours yet: no overlay, and the prompt does not mention models
+  ctx.storageUri = { fsPath: path.join(tmp, 'storage') };
+  assert.deepStrictEqual(provider.overlayArgs(), []);
+  await provider.onWebviewMessage({ type: 'executePlan', mode: 'write', delegate: true });
+  assert.strictEqual(cfgSet.approvalMode, 'write', 'leaves plan mode; edits auto-approved');
+  provider.busy = false;
+  await provider.afterRestart();
+  assert.match(sent, /delegating it\. Give each numbered task to its own subagent/);
+  assert.doesNotMatch(sent, /`model` field/);
+  // with your models (★): omp may run tasks on them, and the lead is told which they are
+  await ctx.globalState.update('ompChat.favoriteModels', ['deepseek/deepseek-v4-pro', 'openrouter/x/y:free', 'deepseek/deepseek-v4-flash']);
+  provider.modelsCache = [{ id: 'openrouter/x/y:free', name: 'Y', free: true }];
+  const args = provider.overlayArgs();
+  assert.strictEqual(args[0], '--config');
+  const overlay = JSON.parse(fs.readFileSync(args[1], 'utf8'));
+  assert.deepStrictEqual(overlay, { task: { perCallModel: 'on' },
+    modelRoles: { ompchat1: 'deepseek/deepseek-v4-flash', ompchat2: 'deepseek/deepseek-v4-pro', ompchat3: 'openrouter/x/y:free' } });
+  await provider.onWebviewMessage({ type: 'executePlan', mode: 'write', delegate: true });
+  provider.busy = false;
+  await provider.afterRestart();
+  assert.match(sent, /`model` field/);
+  assert.match(sent, /- deepseek\/deepseek-v4-flash — the current model\n- deepseek\/deepseek-v4-pro\n- openrouter\/x\/y:free \(Y\) — free\n/);
+  // skills switched off ride in the same overlay
+  await ctx.workspaceState.update('ompChat.disabledSkills', ['tdd']);
+  assert.deepStrictEqual(JSON.parse(fs.readFileSync(provider.overlayArgs()[1], 'utf8')).disabledExtensions, ['skill:tdd']);
+  // plain execute keeps the plain prompt
+  await provider.onWebviewMessage({ type: 'executePlan', mode: 'always-ask' });
+  provider.busy = false;
+  await provider.afterRestart();
+  assert.match(sent, /Go ahead and implement the plan above\.$/);
+  vsStub.workspace.getConfiguration = getCfg;
+  await ctx.workspaceState.update('ompChat.disabledSkills', []);
+
   // ---- worktree chat: its own branch next to the repo; removed on close only when nothing happened in it ----
   await newWorktreeChat(ctx);
   const wtChat = [...chats].find((c) => c.worktree);

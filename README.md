@@ -4,7 +4,7 @@ An AI coding chat for VS Code, in the spirit of Claude Code and GitHub Copilot C
 
 - Chat panel with Markdown answers, collapsible thinking, and a compact row for every tool the agent runs
 - Asks before it edits files or runs commands, with four approval modes
-- Inline diffs for every changed file, plus **Undo**
+- Inline diffs for every changed file, plus **Undo**; review in the editor with **Accept** / **Reject** per change
 - Sends the open file or your selection with your message; `@` mentions files; paste or drop images
 - `/` commands, a model picker, several API keys per provider, and automatic key switching when a limit is hit
 - Usage and limits: context fill, 5-hour / weekly / monthly plan windows, free-model quota
@@ -142,7 +142,11 @@ The agent can always read files. Whether it must ask before changing anything de
 | **Full auto** | Nothing |
 | **Plan (read-only)** | Nothing: every edit and command is refused. The agent studies the code and writes a plan |
 
-In **Plan** mode, when the plan is written a card asks **Execute, ask before edits**, **Execute, auto-approve edits** or **Keep planning**. Executing switches to that mode and asks the agent to carry out the plan in the same conversation.
+In **Plan** mode the agent writes the plan as numbered tasks (what to do, files, how to check it, how hard it is, what it depends on). When the plan is written a card asks **Execute, ask before edits**, **Execute, auto-approve edits**, **Split across subagents** or **Keep planning**. Executing switches to that mode and asks the agent to carry out the plan in the same conversation.
+
+**Split across subagents** makes the agent the lead: each task goes to its own subagent with a self-contained brief, tasks that do not depend on each other run in parallel, and the lead then reviews the changes together, runs the checks and sums up per task. Edits are auto-approved; commands still ask.
+
+Each task runs on the model that suits it, picked from **your models** (★ in the model list) plus the one in use: the strongest for design or tricky debugging, a faster or cheaper one for search, docs or small edits, each with its own effort. OMP Chat allows exactly those models for subagents (omp's `task.perCallModel`, set for this run only; omp's own settings are not changed), and each subagent card shows the model it runs on. Star at least one model besides the current one to use this; changes to your models apply the next time omp starts (executing a plan restarts it).
 
 A request shows as a card in the chat, for example **Allow tool: edit — File: calc.py** with **Approve / Approve edit for this session / Deny**. Once answered it shrinks to one line. Changing the mode restarts omp and keeps the conversation.
 
@@ -153,7 +157,8 @@ When omp needs a typed answer (a name, a piece of text), the card has a text box
 Every tool the agent runs is a compact row (✓ done, ✕ failed); click it to see the output. Edited files are listed under **N files changed** with the number of added and removed lines:
 
 - **Show changes**: the diff inside the chat
-- Diff button (or the file name): VS Code's side-by-side diff
+- File name: opens the file for review in the editor. Added and changed lines are highlighted; a line where something was removed shows "−N removed", and hovering it shows the old text. **Accept** / **Reject** above each change keep it or put it back; **Accept all** / **Reject all** at the top settle the whole file. Rejected parts are saved to disk, and the agent is told with your next message. The review lasts until every change is settled (or VS Code reloads).
+- Diff button: VS Code's side-by-side diff
 - **Undo**: puts the file back as it was before that edit (a file the agent created is deleted). If the file changed again afterwards, OMP Chat asks first. The agent is told about the undo with your next message.
 
 ### Subagents
