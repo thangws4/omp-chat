@@ -116,7 +116,6 @@
     "Stopped": "Đã dừng",
     "in use": "đang dùng",
     "just now": "vừa xong",
-
     "Created": "Đã tạo",
     "Creating": "Đang tạo",
     "Edited": "Đã sửa",
@@ -155,13 +154,11 @@
     "Undo this change": "Hoàn tác thay đổi này",
     "Undone": "Đã hoàn tác",
     "Undo anyway": "Vẫn hoàn tác",
-
     "View its conversation": "Xem cuộc trò chuyện của nó",
     "Send it an instruction": "Gửi chỉ dẫn cho nó",
     "Stop this subagent": "Dừng subagent này",
     "Show its card": "Hiện thẻ của nó",
     "Task brief": "Nhiệm vụ",
-
     "Ready to carry out this plan?": "Thực hiện kế hoạch này?",
     "Plan mode is read-only. Approving switches modes and asks the agent to implement the plan, in this conversation.": "Chế độ lập kế hoạch chỉ đọc. Duyệt sẽ chuyển chế độ và yêu cầu agent thực hiện kế hoạch, ngay trong cuộc trò chuyện này.",
     "Execute, ask before edits": "Thực hiện, hỏi trước khi sửa",
@@ -172,7 +169,6 @@
     "Kept planning": "Đã tiếp tục lên kế hoạch",
     "Approve": "Duyệt",
     "Deny": "Từ chối",
-
     "Models": "Model",
     "Manage models…": "Quản lý model…",
     "Manage your models": "Quản lý model của bạn",
@@ -192,7 +188,6 @@
     "Filter conversations": "Lọc cuộc trò chuyện",
     "No match": "Không khớp",
     "No match.": "Không có kết quả.",
-
     "Plugins & skills": "Plugin & skill",
     "Auto-pick skills for each message": "Tự chọn skill cho mỗi tin nhắn",
     "Name matching skills to the agent with each message": "Gợi ý skill phù hợp cho agent với mỗi tin nhắn",
@@ -202,7 +197,6 @@
     "Switch the whole plugin on": "Bật cả plugin",
     "Your skills": "Skill của bạn",
     "Project skills": "Skill của dự án",
-
     "Commands": "Lệnh",
     "A command is a saved prompt: type /name in the chat to send it. omp also reads Claude Code commands (.claude/commands).": "Lệnh là một prompt đã lưu: gõ /tên trong chat để gửi. omp cũng đọc lệnh của Claude Code (.claude/commands).",
     "None yet. Commands you create are saved as Markdown files you can share with your team.": "Chưa có. Lệnh bạn tạo được lưu thành file Markdown, có thể chia sẻ với nhóm.",
@@ -239,7 +233,6 @@
     "this project": "dự án này",
     "project · .claude": "dự án này · .claude",
     "all projects · .claude": "mọi dự án · .claude",
-
     "MCP servers": "MCP server",
     "MCP servers give the agent extra tools (GitHub, databases, browsers…). Servers start when the agent starts.": "MCP server cho agent thêm công cụ (GitHub, cơ sở dữ liệu, trình duyệt…). Server khởi động cùng agent.",
     "No MCP servers in this project or your user settings yet.": "Chưa có MCP server nào trong dự án này hoặc trong cài đặt của bạn.",
@@ -262,15 +255,18 @@
     "All projects": "Mọi dự án",
     "Agent restarted with the new MCP servers.": "Đã khởi động lại agent với MCP server mới.",
     "The URL must start with http:// or https:// and contain no spaces.": "URL phải bắt đầu bằng http:// hoặc https:// và không có dấu cách.",
-
     "API keys": "API key",
     "API key": "API key",
-    "The checked key is the one OMP uses. When it hits its limit, OMP moves to the next key of that provider by itself.": "Key được chọn là key OMP đang dùng. Khi key chạm giới hạn, OMP tự chuyển sang key kế tiếp của nhà cung cấp đó.",
+    "Click a key to use it. When the one in use hits its limit, OMP moves to the next key of that provider by itself.": "Bấm vào một key để dùng nó. Khi key đang dùng chạm giới hạn, OMP tự chuyển sang key kế tiếp của nhà cung cấp đó.",
+    "Add a key from one of these providers to start chatting. Keys stay in VS Code's encrypted storage.": "Thêm key của một trong các nhà cung cấp dưới đây để bắt đầu chat. Key được lưu trong kho mã hoá của VS Code.",
+    "Use this key": "Dùng key này",
+    "Add a provider": "Thêm nhà cung cấp",
+    "Providers": "Nhà cung cấp",
+    "Base URL": "Base URL",
     "Add key…": "Thêm key…",
     "Add or manage keys…": "Thêm hoặc quản lý key…",
     "Add an API key": "Thêm API key",
     "Set API key": "Đặt API key",
-    "No key yet.": "Chưa có key.",
     "No key saved for this provider.": "Chưa lưu key nào cho nhà cung cấp này.",
     "Click again to remove": "Bấm lần nữa để xóa",
     "Switch to this key (the conversation continues)": "Chuyển sang key này (cuộc trò chuyện vẫn tiếp tục)",
@@ -289,7 +285,6 @@
     "free :free models available": "có model :free miễn phí",
     "free deepseek-v4.1-flash-free (limited time)": "miễn phí deepseek-v4.1-flash-free (có thời hạn)",
     "paid, cheap": "trả phí, rẻ",
-
     "Usage & limits": "Mức dùng & giới hạn",
     "Click for usage & limits": "Bấm để xem mức dùng và giới hạn",
     "This chat": "Cuộc trò chuyện này",
@@ -317,7 +312,6 @@
     "Save your API key in OMP Chat to see the exact quota and balance.": "Lưu API key trong OMP Chat để xem chính xác hạn mức và số dư.",
     "This provider has no usage API; limits show up as errors when reached.": "Nhà cung cấp này không có API xem mức dùng; khi chạm giới hạn sẽ báo lỗi.",
     "Balance too low for API calls. Top up at platform.deepseek.com.": "Số dư quá thấp để gọi API. Nạp thêm tại platform.deepseek.com.",
-
     "errors and warnings from the Problems panel": "lỗi và cảnh báo trong tab Problems",
     "recent output of the active terminal": "output gần nhất của terminal đang mở",
     "uncommitted changes (git status and diff)": "thay đổi chưa commit (git status và diff)",
@@ -336,7 +330,6 @@
     "Where is omp?": "omp nằm ở đâu?",
     "Use this path": "Dùng đường dẫn này",
     "omp is not running": "omp chưa chạy",
-
     "🔴 waiting for you": "🔴 đang chờ bạn",
     "🟡 working": "🟡 đang làm",
     "🔵 done": "🔵 xong",
@@ -403,6 +396,7 @@
     ["^Could not list models: ([\\s\\S]*)$", "Không lấy được danh sách model: $1"],
     ["^Could not attach (.+?): ([\\s\\S]*)$", "Không đính kèm được $1: $2"],
     ["^At most (\\d+) files per message\\.$", "Tối đa $1 file mỗi tin nhắn."],
+    ["^Add a (.+) key$", "Thêm key $1"],
     ["^(.+): OMP cannot read old Office files\\. Save it as \\.docx, \\.xlsx, \\.pptx or PDF and attach that\\.$", "$1: OMP không đọc được file Office đời cũ. Hãy lưu lại thành .docx, .xlsx, .pptx hoặc PDF rồi đính kèm."],
     ["^(.+) is larger than 20 MB, so it was not attached\\.$", "$1 lớn hơn 20 MB nên chưa được đính kèm."],
     ["^Could not list plugins: ([\\s\\S]*)$", "Không lấy được danh sách plugin: $1"],

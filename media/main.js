@@ -1104,21 +1104,50 @@
     s.appendChild(btns);
   }
 
-  // Saved keys per provider: switch, rename, remove, add.
+  // Saved keys per provider: switch, rename, remove, add. Providers with keys get a card each; the others are
+  // a row of "+ Provider" chips below.
   function showKeys(m) {
     const s = openSheet('API keys', 'key');
-    s.appendChild(el('div', 'unote', 'The checked key is the one OMP uses. When it hits its limit, OMP moves to the next key of that provider by itself.'));
-    for (const g of m.groups) {
-      const sec = section(s, g.label);
+    s.classList.add('keys');
+    const mine = m.groups.filter((g) => g.keys.length), rest = m.groups.filter((g) => !g.keys.length);
+    s.appendChild(el('div', 'unote', mine.length
+      ? 'Click a key to use it. When the one in use hits its limit, OMP moves to the next key of that provider by itself.'
+      : 'Add a key from one of these providers to start chatting. Keys stay in VS Code\'s encrypted storage.'));
+    const scroll = el('div', 'kscroll');
+    s.appendChild(scroll);
+    for (const g of mine) {
+      const card = el('div', 'kcard');
+      const head = el('div', 'khead');
+      const add = el('button', 'icon');
+      add.title = `Add a ${g.providers.join(' / ')} key`;
+      add.appendChild(icon('add'));
+      add.onclick = () => vscode.postMessage({ type: 'addKey', provider: g.providers[0] });
+      head.append(el('span', 'kprov', g.label), el('span', 'kcount', String(g.keys.length)), el('span', 'spacer'), add);
+      head.title = g.about || '';
+      card.appendChild(head);
       for (const k of g.keys) {
         const r = el('div', 'krow' + (k.active ? ' active' : ''));
         const name = el('span', 'klabel', k.label);
-        r.append(icon(k.active ? 'check' : 'key'), name, el('span', 'kmask', k.mask), el('span', 'spacer'));
-        if (!k.active) {
-          const use = el('button', 'secondary', 'Use');
-          use.onclick = () => { use.disabled = true; vscode.postMessage({ type: 'useKey', env: g.env, id: k.id, from: 'keys' }); };
-          r.appendChild(use);
+        const text = el('div', 'ktext');
+        const line = el('div', 'kline');
+        line.append(name, el('span', 'kmask', k.mask));
+        if (k.active) line.appendChild(el('span', 'kuse', 'in use'));
+        text.appendChild(line);
+        if (k.baseUrl) {
+          const u = el('div', 'kurl');
+          u.append(icon('globe'), el('span', '', k.baseUrl));
+          u.title = k.baseUrl;
+          text.appendChild(u);
         }
+        r.append(icon(k.active ? 'pass-filled' : 'circle-large-outline', 'kradio'), text);
+        if (!k.active) { // the whole row switches to this key
+          r.classList.add('pick');
+          r.tabIndex = 0;
+          r.title = 'Use this key';
+          r.onclick = (e) => { if (e.target.closest('button, input')) return; r.classList.add('busy'); vscode.postMessage({ type: 'useKey', env: g.env, id: k.id, from: 'keys' }); };
+          r.onkeydown = (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === r) { e.preventDefault(); r.click(); } };
+        }
+        const acts = el('span', 'kacts');
         const ren = el('button', 'icon');
         ren.title = 'Rename';
         ren.appendChild(icon('edit'));
@@ -1146,13 +1175,23 @@
         url.title = 'Base URL';
         url.appendChild(icon('globe'));
         url.onclick = () => vscode.postMessage({ type: 'editBaseUrl', env: g.env, id: k.id });
-        r.append(ren, url, rm);
-        sec.appendChild(r);
+        acts.append(ren, url, rm);
+        r.appendChild(acts);
+        card.appendChild(r);
       }
-      if (!g.keys.length) sec.appendChild(el('div', 'unote', 'No key yet.'));
-      const add = el('button', 'secondary', `Add ${g.providers.join(' / ')} key`);
-      add.onclick = () => vscode.postMessage({ type: 'addKey', provider: g.providers[0] });
-      sec.appendChild(add);
+      scroll.appendChild(card);
+    }
+    if (rest.length) {
+      scroll.appendChild(el('div', 'ush', mine.length ? 'Add a provider' : 'Providers'));
+      const chips = el('div', 'kchips');
+      for (const g of rest) {
+        const c = el('button', 'chip kadd');
+        c.title = g.about || '';
+        c.append(icon('add'), el('span', '', g.label));
+        c.onclick = () => vscode.postMessage({ type: 'addKey', provider: g.providers[0] });
+        chips.appendChild(c);
+      }
+      scroll.appendChild(chips);
     }
   }
   function closeDialog(id, answer) {

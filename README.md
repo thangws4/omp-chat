@@ -322,11 +322,13 @@ Start a one-line message with `#` to save a note for the agent instead of sendin
 
 ### Several keys
 
-**…** → **Set API Key…** opens the key list in the panel. For each provider you can:
+**…** → **Set API Key…** opens the key list in the panel. Each provider you have keys for gets a card:
 
-- **Add** a key (the newest becomes the active one)
-- **Use** another key; omp restarts with it and the conversation continues
-- **Rename** (✏), change the **Base URL** (🌐) or **Remove** (🗑, click twice to confirm)
+- Click a key to **use** it (the one in use is marked **in use**); omp restarts with it and the conversation continues
+- **+** on a card adds another key for that provider (the newest becomes the active one)
+- Hover a key for **Rename** (✏), **Base URL** (🌐, shown under the key when set) and **Remove** (🗑, click twice to confirm)
+
+Providers without a key are listed below as **+ Provider** chips; click one to add its key.
 
 When a request fails because a limit or credit ran out (HTTP 429 / 402, "rate limit", "quota"…), OMP Chat moves to the provider's next key, restarts omp on the same conversation and retries the turn with `/retry`. When every key is spent, it offers **Choose another model**, **Manage keys** and **Usage & limits**.
 

@@ -600,8 +600,9 @@ class ChatProvider {
     return Promise.all(keys.ENVS.map(async (env) => {
       const list = await keys.loadKeys(this.context, env);
       const active = keys.activeKey(this.context, env, list);
-      return { env, label: keys.groupLabel(env), providers: PROVIDERS.filter((p) => p.env === env).map((p) => p.label),
-        keys: list.map((k) => ({ id: k.id, label: k.label, mask: keys.mask(k.key) + (k.baseUrl ? ` · ${k.baseUrl}` : ''), active: k.id === active?.id })) };
+      const ps = PROVIDERS.filter((p) => p.env === env);
+      return { env, label: keys.groupLabel(env), providers: ps.map((p) => p.label), about: ps.map((p) => `${p.label}: ${p.description}`).join('\n'),
+        keys: list.map((k) => ({ id: k.id, label: k.label, mask: keys.mask(k.key), baseUrl: k.baseUrl || '', active: k.id === active?.id })) };
     }));
   }
 
