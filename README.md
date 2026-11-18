@@ -1,6 +1,6 @@
 # OMP Chat by DT
 
-An AI coding chat for VS Code, in the spirit of Claude Code and GitHub Copilot Chat. It runs the open-source [oh-my-pi](https://github.com/can1357/oh-my-pi) agent (`omp`), which reads your code, edits files and runs commands. It works with low-cost and free models from OpenCode, OpenRouter and DeepSeek, using your own API keys.
+An AI coding chat for VS Code, in the spirit of Claude Code and GitHub Copilot Chat. It runs the open-source [oh-my-pi](https://github.com/can1357/oh-my-pi) agent (`omp`), which reads your code, edits files and runs commands. It works with OpenCode, OpenRouter, DeepSeek, Anthropic, OpenAI, Gemini, xAI, Mistral, Groq, Moonshot and Z.ai models (or any compatible endpoint), using your own API keys.
 
 - Chat panel with Markdown answers, collapsible thinking, and a compact row for every tool the agent runs
 - Asks before it edits files or runs commands, with four approval modes
@@ -76,6 +76,16 @@ The first time you open the panel, a **Connect a model provider** form appears a
 | **OpenCode Zen** | Pay-per-use gateway. Its `-free` models are meant for the OpenCode app: used from other tools such as omp, the free allowance runs out quickly | https://opencode.ai/console |
 | **OpenRouter** | Hundreds of models; `:free` models cost nothing (50 requests/day, 1,000 after buying $10 of credits) | https://openrouter.ai/keys |
 | **DeepSeek** | DeepSeek's own API, pay per token | https://platform.deepseek.com/api_keys |
+| **Anthropic** | Claude models, pay per token | https://platform.anthropic.com/settings/keys |
+| **OpenAI** | GPT models, pay per token | https://platform.openai.com/api-keys |
+| **Google Gemini** | Gemini models, free tier available | https://aistudio.google.com/apikey |
+| **xAI** | Grok models, pay per token | https://console.x.ai |
+| **Mistral** | Devstral / Codestral, free tier available | https://console.mistral.ai/api-keys |
+| **Groq** | Fast open models, free tier available | https://console.groq.com/keys |
+| **Moonshot** | Kimi models, pay per token | https://platform.moonshot.ai/console/api-keys |
+| **Z.ai** | GLM models | https://z.ai/manage-apikey/apikey-list |
+
+**Base URL (optional)**: fill it in to send that key's requests to a proxy, gateway or other compatible endpoint (for example `https://my-proxy.example.com/v1`) instead of the provider's own. It belongs to the key: it applies while that key is active, and the key list shows it next to the key. To change or clear it later, use the 🌐 button on the key in the key list.
 
 OpenCode Go and OpenCode Zen use the same OpenCode key (create it at https://opencode.ai/console with the **Models: Request** permission, plus **Usage: Read** for the usage panel). Every `opencode-go/…` model needs the Go subscription, including the ones whose names end in `-free`; the model list marks them **Go plan**. Prices and free offers change often, so check the provider's page.
 
@@ -100,6 +110,9 @@ The bar under the box is laid out like Claude Code's: on the left the approval m
 | `@` | Lists workspace files as you type (`@cal…`). **↑ ↓** to move, **Enter** or **Tab** to insert, **Esc** to close. The `@` button does the same |
 | `@problems` | Sends the errors and warnings from VS Code's **Problems** panel with your message |
 | `@terminal` | Sends the recent output of the active terminal (copied through the clipboard, which is put back afterwards) |
+| `@git` | Sends what you have not committed yet: `git status` and the diff against `HEAD` |
+| `@src/` | A folder: omp sends the list of its files. Folders are in the `@` list too |
+| `@https://…` | Fetches the page and sends it as text (up to 3 links per message, 20,000 characters each) |
 | Images | Paste with **Ctrl+V**, drop onto the box, or use the 🖼 button. Up to 5 per message; large images are scaled down. The model must support images |
 | `/` | Lists omp's slash commands, for example `/session`, `/compact`, `/retry`, `/mcp` |
 | `!` | Runs the rest as a shell command in the workspace (the box switches to shell mode). See [Terminal](#terminal) |
@@ -149,6 +162,8 @@ In **Plan** mode the agent writes the plan as numbered tasks (what to do, files,
 Each task runs on the model that suits it, picked from **your models** (★ in the model list) plus the one in use: the strongest for design or tricky debugging, a faster or cheaper one for search, docs or small edits, each with its own effort. OMP Chat allows exactly those models for subagents (omp's `task.perCallModel`, set for this run only; omp's own settings are not changed), and each subagent card shows the model it runs on. Star at least one model besides the current one to use this; changes to your models apply the next time omp starts (executing a plan restarts it).
 
 A request shows as a card in the chat, for example **Allow tool: edit — File: calc.py** with **Approve / Approve edit for this session / Deny**. Once answered it shrinks to one line. Changing the mode restarts omp and keeps the conversation.
+
+**Allowed commands**: commands you trust run without a card, in every mode except Plan. A command's card offers **Always allow** *pattern* (its first two words and anything after, e.g. `npm test*`), which adds the pattern to `ompChat.allowedCommands`; edit that setting to change or remove patterns. A pattern must match the whole command, `*` matching anything. A command with `&&`, `|`, `;`, `$(…)` or `>` always asks, and so does one omp flags as dangerous.
 
 When omp needs a typed answer (a name, a piece of text), the card has a text box; multi-line boxes submit with **Ctrl+Enter**.
 
@@ -233,7 +248,7 @@ Start a one-line message with `#` to save a note for the agent instead of sendin
 
 - **Add** a key (the newest becomes the active one)
 - **Use** another key; omp restarts with it and the conversation continues
-- **Rename** (pencil) or **Remove** (bin; click twice to confirm)
+- **Rename** (pencil), change the **Base URL** (globe) or **Remove** (bin; click twice to confirm)
 
 When a request fails because a limit or credit ran out (HTTP 429 / 402, "rate limit", "quota"…), OMP Chat moves to the provider's next key, restarts omp on the same conversation and retries the turn with `/retry`. When every key is spent, it offers **Choose another model**, **Manage keys** and **Usage & limits**.
 
@@ -308,6 +323,7 @@ Type `/` to see everything available on your machine.
 | `ompChat.notifications` | `true` | Notify when a chat needs you or finishes while you are elsewhere |
 | `ompChat.announceSteps` | `true` | The agent says what it is about to do before it uses tools, gives short updates while it works and sums up at the end, as in Claude Code (added to omp's system prompt; a `--append-system-prompt` in `extraArgs` replaces it) |
 | `ompChat.approvalMode` | `always-ask` | `always-ask`, `always-ask-cached`, `write`, `yolo` or `plan` (the toolbar modes above) |
+| `ompChat.allowedCommands` | `[]` | Commands that run without asking, e.g. `["npm test*", "git status"]`. See [Approvals](#approvals) |
 | `ompChat.ompPath` | `omp` | Path to the omp executable |
 | `ompChat.extraArgs` | `[]` | Extra omp command-line arguments |
 

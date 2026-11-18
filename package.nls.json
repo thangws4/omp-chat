@@ -32,5 +32,6 @@
   "command.newWorktreeChat": "New Chat in Git Worktree…",
   "command.chats": "Show All Chats",
   "command.attention": "Go to the Chat That Needs You",
-  "config.notifications": "Show a notification when a chat needs your answer while it is hidden or VS Code is in the background, and when it finishes while VS Code is in the background."
+  "config.notifications": "Show a notification when a chat needs your answer while it is hidden or VS Code is in the background, and when it finishes while VS Code is in the background.",
+  "config.allowedCommands": "Shell commands the agent runs without asking, in every approval mode except Plan. A pattern covers the whole command; `*` matches anything (`npm test*`, `git status`). A command with `&&`, `|`, `;`, `$(…)` or `>` still asks, and so do commands omp flags as dangerous. **Always allow** on a command's approval card adds one."
 }

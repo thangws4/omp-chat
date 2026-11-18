@@ -146,6 +146,44 @@ function problemLines(entries, max = 60) {
 
 const fence = (title, body) => `[${title}]\n\`\`\`\n${body.replace(/```/g, '``​`')}\n\`\`\``;
 
+// "@https://…": the page as text. HTML loses its scripts, styles and tags; anything else is sent as is.
+async function fetchPage(url, max = 20000) {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000), headers: { 'User-Agent': 'omp-chat', Accept: 'text/html,text/plain,*/*' } });
+    if (!res.ok) return fence(`Web page ${url}`, `Could not fetch it: HTTP ${res.status}.`);
+    const type = res.headers.get('content-type') || '';
+    if (!/text|json|xml|javascript/.test(type)) return fence(`Web page ${url}`, `Not text (${type || 'unknown type'}); not included.`);
+    let body = await res.text();
+    if (/html/.test(type)) {
+      body = body.replace(/<(script|style|noscript|svg|head)\b[\s\S]*?<\/\1>/gi, ' ').replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/<\/(p|div|li|tr|h\d|pre|section|article|br)>|<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, ' ')
+        .replace(/&nbsp;/g, ' ').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
+        .replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim();
+    }
+    return fence(`Web page ${url}`, body.length > max ? `${body.slice(0, max)}\n… (cut at ${max.toLocaleString('en')} characters)` : body);
+  } catch (e) {
+    return fence(`Web page ${url}`, `Could not fetch it: ${e.name === 'TimeoutError' ? 'timed out after 15 s' : e.message}.`);
+  }
+}
+
+// ---- allowed commands (ompChat.allowedCommands): run without asking ----
+// Only omp's plain command prompt matches: one with a "Reason:" line (critical command, restricted folder,
+// a prompt rule of yours) or anything after the command keeps asking. Like omp's own bash.patterns allow
+// rules, a pattern must cover the whole command and never a line with shell control (&&, |, ;, $(…), > …).
+const BASH_ASK = /^Allow tool: bash\nCommand: ([^\n]+)$/;
+const SHELL_CONTROL = /[;&|`$<>(){}\\\r\n]|…/;
+const words = (s) => s.trim().replace(/\s+/g, ' ');
+const globRe = (p) => new RegExp('^' + words(p).split('*').map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$');
+function allowedPattern(command, patterns) {
+  if (SHELL_CONTROL.test(command)) return undefined;
+  return patterns.find((p) => typeof p === 'string' && words(p) && globRe(p).test(words(command)));
+}
+// What "Always allow" offers for a command: its first two words and anything after ("npm test*"), or the word alone.
+function suggestPattern(command) {
+  const w = words(command).split(' ');
+  return w.length > 1 ? `${w[0]} ${w[1]}*` : w[0];
+}
+
 // A conversation (omp's get_messages) as Markdown, for "Export Chat".
 function toMarkdown(messages, model) {
   const out = [`# OMP Chat${model ? ` · ${model}` : ''}`, `_Exported ${new Date().toLocaleString()}_`];
@@ -523,14 +561,20 @@ class ChatProvider {
           options: PROVIDERS.map((p) => ({ value: p.label, label: `${p.label} — ${p.description}` })) },
         { name: 'key', label: 'API key', type: 'password', placeholder: 'Paste the key', required: true },
         { name: 'label', label: 'Name (optional)', placeholder: 'e.g. work, personal' },
+        { name: 'baseUrl', label: 'Base URL (optional)', placeholder: "Proxy or compatible endpoint; empty = the provider's own" },
       ],
       submit: 'Save key', cancel: intro ? 'Skip' : 'Cancel',
     });
     if (!v?.key?.trim()) return false;
+    const baseUrl = keys.normalizeBaseUrl(v.baseUrl);
+    if (baseUrl === null) {
+      this.post({ type: 'error', text: `"${v.baseUrl}" is not an http(s) URL; the key was not saved.` });
+      return false;
+    }
     const p = PROVIDERS.find((x) => x.label === v.provider) || PROVIDERS[0];
     const count = (await keys.loadKeys(this.context, p.env)).length;
     const label = v.label?.trim() || (count ? `${p.label} ${count + 1}` : p.label);
-    await keys.addKey(this.context, p.env, label, v.key.trim());
+    await keys.addKey(this.context, p.env, label, v.key.trim(), baseUrl, p.prefix.slice(0, -1));
     // Move to this provider when the current model has no key to run with.
     const cfg = vscode.workspace.getConfiguration('ompChat');
     const cur = keys.providerOf(cfg.get('model'));
@@ -549,7 +593,7 @@ class ChatProvider {
       const list = await keys.loadKeys(this.context, env);
       const active = keys.activeKey(this.context, env, list);
       return { env, label: keys.groupLabel(env), providers: PROVIDERS.filter((p) => p.env === env).map((p) => p.label),
-        keys: list.map((k) => ({ id: k.id, label: k.label, mask: keys.mask(k.key), active: k.id === active?.id })) };
+        keys: list.map((k) => ({ id: k.id, label: k.label, mask: keys.mask(k.key) + (k.baseUrl ? ` · ${k.baseUrl}` : ''), active: k.id === active?.id })) };
     }));
   }
 
@@ -561,6 +605,36 @@ class ChatProvider {
   async renameKey(env, id, label) {
     if (!label?.trim()) return;
     await keys.updateKeys(this.context, env, (l) => l.map((k) => (k.id === id ? { ...k, label: label.trim() } : k)));
+    this.showKeys();
+  }
+
+  async editBaseUrl(env, id) {
+    const list = await keys.loadKeys(this.context, env);
+    const k = list.find((x) => x.id === id);
+    if (!k) return;
+    const providers = PROVIDERS.filter((p) => p.env === env);
+    const current = providers.find((p) => p.prefix === `${k.provider}/`) || providers[0];
+    const v = await this.ask({
+      title: `Base URL of "${k.label}"`,
+      text: "Empty = the provider's own endpoint.",
+      fields: [
+        // OpenCode Go and Zen share a key but not an endpoint: say which one the URL replaces.
+        ...(providers.length > 1 ? [{ name: 'provider', label: 'Provider', type: 'select', value: current.label,
+          options: providers.map((p) => ({ value: p.label, label: p.label })) }] : []),
+        { name: 'baseUrl', label: 'Base URL (optional)', value: k.baseUrl || '', placeholder: "Proxy or compatible endpoint; empty = the provider's own" },
+      ],
+      submit: 'Save', cancel: 'Cancel',
+    });
+    if (!v) return;
+    const baseUrl = keys.normalizeBaseUrl(v.baseUrl);
+    if (baseUrl === null) return this.post({ type: 'error', text: `"${v.baseUrl}" is not an http(s) URL; the base URL was not changed.` });
+    const p = providers.find((x) => x.label === v.provider) || current;
+    await keys.updateKeys(this.context, env, (l) => l.map((x) => {
+      if (x.id !== id) return x;
+      const { baseUrl: _, provider: __, ...rest } = x;
+      return baseUrl ? { ...rest, baseUrl, provider: p.prefix.slice(0, -1) } : rest;
+    }));
+    if (keys.activeKey(this.context, env, list)?.id === id) await this.restart(); // omp is using it
     this.showKeys();
   }
 
@@ -612,6 +686,7 @@ class ChatProvider {
       case 'useKey': await this.useKey(m.env, m.id); return m.from === 'keys' ? this.showKeys() : this.showUsage();
       case 'renameKey': return this.renameKey(m.env, m.id, m.label);
       case 'removeKey': return this.removeKey(m.env, m.id);
+      case 'editBaseUrl': return this.editBaseUrl(m.env, m.id);
       case 'rewind': return this.rewind(m.turn, !!m.restoreCode);
       case 'promoteQueued': return this.promoteQueued(m.qid);
       case 'removeQueued': return this.removeQueued(m.qid);
@@ -670,6 +745,7 @@ class ChatProvider {
   async spawn() {
     // The active saved key of each provider; switching keys means respawning (see restart()).
     const env = { ...process.env, ...(await keys.envFor(this.context)) };
+    const baseUrls = await keys.baseUrlsFor(this.context);
     // Read config after the awaits so a setting changed meanwhile is picked up.
     const cfg = vscode.workspace.getConfiguration('ompChat');
     this.cwd = this.worktree?.cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
@@ -678,7 +754,7 @@ class ChatProvider {
     const mode = cfg.get('approvalMode') === 'plan' ? 'always-ask' : cfg.get('approvalMode');
     const args = ['--mode', 'rpc', '--model', cfg.get('model'), ...(mode ? ['--approval-mode', mode] : []), `--thinking=${thinkingLevel(cfg)}`,
       ...(cfg.get('announceSteps', true) ? [`--append-system-prompt=${ANNOUNCE_STEPS}`] : []), // a later one in extraArgs wins
-      ...this.overlayArgs(), ...cfg.get('extraArgs', [])];
+      ...this.overlayArgs(), ...this.baseUrlArgs(baseUrls), ...cfg.get('extraArgs', [])];
     const ompPath = cfg.get('ompPath') || 'omp';
     const fallback = ompPath === 'omp' ? this.ompFallback : null;
     const command = fallback ? fallback.omp : ompPath;
@@ -721,6 +797,13 @@ class ChatProvider {
         if (this.client !== client) this.resume = { file, replay }; // omp failed to start: keep it for the retry
         else this.post({ type: 'error', text: `Could not resume the conversation: ${e.message}` });
       }
+    }
+    // omp resolves the startup (or resumed) model before extensions register providers: pick it again to get its base URL.
+    if (Object.keys(baseUrls).length) {
+      try {
+        const { model } = await client.request({ type: 'get_state' });
+        if (model && baseUrls[model.provider]) await client.request({ type: 'set_model', provider: model.provider, modelId: model.id });
+      } catch {}
     }
     this.track(client);
     // Live subagent lifecycle + progress frames (off by default in omp's RPC mode).
@@ -1208,6 +1291,21 @@ class ChatProvider {
       return ['--config', file];
     } catch (e) {
       this.post({ type: 'error', text: `Could not write omp's settings overlay: ${e.message}` });
+      return [];
+    }
+  }
+
+  // Base URLs reach omp through a tiny extension (omp has no flag or env var that works for every provider).
+  baseUrlArgs(urls) {
+    const dir = this.context.globalStorageUri?.fsPath;
+    if (!Object.keys(urls).length || !dir) return [];
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, 'omp-base-urls.js');
+      fs.writeFileSync(file, `export default function (pi) {\n  for (const [id, baseUrl] of Object.entries(${JSON.stringify(urls)})) pi.registerProvider(id, { baseUrl });\n}\n`);
+      return ['-e', file];
+    } catch (e) {
+      this.post({ type: 'error', text: `Could not apply the base URL: ${e.message}` });
       return [];
     }
   }
@@ -1711,7 +1809,8 @@ class ChatProvider {
     this.postContext();
   }
 
-  // "@problems" and "@terminal" in a message: what they point at, sent along (not shown in your bubble).
+  // "@problems", "@terminal", "@git" and "@https://…" in a message: what they point at, sent along (not shown in
+  // your bubble). "@file" and "@folder/" are omp's: it reads the file or lists the folder itself.
   async mentions(text) {
     const blocks = [];
     if (/(^|\s)@problems\b/.test(text)) {
@@ -1722,7 +1821,25 @@ class ChatProvider {
       const out = await this.terminalText();
       blocks.push(fence(`Terminal output${out ? `: ${vscode.window.activeTerminal.name}` : ''}`, out || 'No terminal is open.'));
     }
+    if (/(^|\s)@git\b/.test(text)) blocks.push(await this.gitChanges());
+    const urls = [...new Set([...text.matchAll(/(?:^|\s)@(https?:\/\/[^\s<>"']+)/g)].map((m) => m[1].replace(/[),.;:!?\]]+$/, '')))];
+    for (const url of urls.slice(0, 3)) blocks.push(await fetchPage(url));
     return blocks;
+  }
+
+  // "@git": what you have not committed yet, as git status plus the diff against HEAD.
+  async gitChanges() {
+    const cwd = this.cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    try {
+      const status = await git(['status', '--short'], cwd);
+      if (!status) return fence('Uncommitted changes (git)', 'No uncommitted changes.');
+      // ponytail: execFile's 1 MB buffer; a bigger diff falls back to --stat.
+      const diff = await git(['diff', 'HEAD'], cwd).catch(() => git(['diff', 'HEAD', '--stat'], cwd));
+      const body = `${status}\n\n${diff}`;
+      return fence('Uncommitted changes (git status + diff HEAD)', body.length > 40000 ? `${body.slice(0, 40000)}\n… (cut at 40,000 characters)` : body);
+    } catch (e) {
+      return fence('Uncommitted changes (git)', `git failed: ${e.message}`);
+    }
   }
 
   // The active terminal's recent output. VS Code has no API to read a terminal, so this copies it.
@@ -1878,6 +1995,22 @@ class ChatProvider {
       this.post({ type: 'notice', text: `Plan mode: blocked ${r.title.split('\n')[0].replace(/^Allow tool:\s*/, '')}. Approve the plan to let the agent make changes.` });
       return;
     }
+    // A command on your allowed list runs without a card; otherwise the card offers to add it to the list.
+    const bash = r.method === 'select' && BASH_ASK.exec(r.title || '');
+    const once = bash && r.options?.find((o) => /^approve( once)?$/i.test(o));
+    let always;
+    if (once && !SHELL_CONTROL.test(bash[1])) {
+      const cfg = vscode.workspace.getConfiguration('ompChat');
+      const list = cfg.get('allowedCommands', []);
+      if (allowedPattern(bash[1], Array.isArray(list) ? list : [])) {
+        this.client?.send({ type: 'extension_ui_response', id: r.id, value: once });
+        return;
+      }
+      const pattern = suggestPattern(bash[1]);
+      always = { label: `Always allow ${pattern}`, pattern };
+      const at = r.options.indexOf(once) + 1;
+      r = { ...r, options: [...r.options.slice(0, at), always.label, ...r.options.slice(at)] };
+    }
     const client = this.client;
     let cancelled = false;
     let res;
@@ -1922,6 +2055,13 @@ class ChatProvider {
         this.refreshStatus();
         cts.dispose();
       }
+    }
+    if (always && res.value === always.label) {
+      res = { value: once };
+      const cfg = vscode.workspace.getConfiguration('ompChat');
+      const list = cfg.get('allowedCommands', []);
+      await cfg.update('allowedCommands', [...new Set([...(Array.isArray(list) ? list : []), always.pattern])], vscode.ConfigurationTarget.Global);
+      this.post({ type: 'notice', text: `Added ${always.pattern} to your allowed commands (setting ompChat.allowedCommands).` });
     }
     // Skip if omp already gave up on it, or the session was replaced while the dialog was open.
     if (!cancelled && client && this.client === client) client.send({ type: 'extension_ui_response', id: r.id, ...res });

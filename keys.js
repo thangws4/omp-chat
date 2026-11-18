@@ -3,6 +3,7 @@
 'use strict';
 const crypto = require('crypto');
 
+// prefix is omp's provider id plus "/".
 const PROVIDERS = [
   { label: 'OpenCode Go', description: '$10/mo plan: DeepSeek, Kimi, GLM, Qwen… (5h / weekly / monthly limits)', env: 'OPENCODE_API_KEY',
     url: 'https://opencode.ai/go', prefix: 'opencode-go/', defaultModel: 'opencode-go/deepseek-v4.1-flash' },
@@ -12,6 +13,22 @@ const PROVIDERS = [
     url: 'https://openrouter.ai/keys', prefix: 'openrouter/', defaultModel: 'openrouter/baidu/ernie-5.5-flash-preview:free' },
   { label: 'DeepSeek', description: 'paid, cheap', env: 'DEEPSEEK_API_KEY', legacySecret: 'ompChat.deepseekApiKey',
     url: 'https://platform.deepseek.com/api_keys', prefix: 'deepseek/', defaultModel: 'deepseek/deepseek-flash' },
+  { label: 'Anthropic', description: 'Claude models, pay per token', env: 'ANTHROPIC_API_KEY',
+    url: 'https://platform.anthropic.com/settings/keys', prefix: 'anthropic/', defaultModel: 'anthropic/claude-sonnet-5-5' },
+  { label: 'OpenAI', description: 'GPT models, pay per token', env: 'OPENAI_API_KEY',
+    url: 'https://platform.openai.com/api-keys', prefix: 'openai/', defaultModel: 'openai/gpt-5.5' },
+  { label: 'Google Gemini', description: 'Gemini models, free tier available', env: 'GEMINI_API_KEY',
+    url: 'https://aistudio.google.com/apikey', prefix: 'google/', defaultModel: 'google/gemini-3.5-flash' },
+  { label: 'xAI', description: 'Grok models, pay per token', env: 'XAI_API_KEY',
+    url: 'https://console.x.ai', prefix: 'xai/', defaultModel: 'xai/grok-4.5' },
+  { label: 'Mistral', description: 'Devstral / Codestral, free tier available', env: 'MISTRAL_API_KEY',
+    url: 'https://console.mistral.ai/api-keys', prefix: 'mistral/', defaultModel: 'mistral/devstral-latest' },
+  { label: 'Groq', description: 'fast open models, free tier available', env: 'GROQ_API_KEY',
+    url: 'https://console.groq.com/keys', prefix: 'groq/', defaultModel: 'groq/openai/gpt-oss-120b' },
+  { label: 'Moonshot', description: 'Kimi models, pay per token', env: 'MOONSHOT_API_KEY',
+    url: 'https://platform.moonshot.ai/console/api-keys', prefix: 'moonshot/', defaultModel: 'moonshot/kimi-k3' },
+  { label: 'Z.ai', description: 'GLM models, cheap subscription or pay per token', env: 'ZAI_API_KEY',
+    url: 'https://z.ai/manage-apikey/apikey-list', prefix: 'zai/', defaultModel: 'zai/glm-5.1' },
 ];
 
 const ENVS = [...new Set(PROVIDERS.map((p) => p.env))];
@@ -50,9 +67,10 @@ async function setActive(context, env, id) {
   await context.globalState?.update(activeState(env), id);
 }
 
-async function addKey(context, env, label, key) {
+// baseUrl (optional) sends this key's requests to a proxy / compatible endpoint of `provider` (omp's provider id).
+async function addKey(context, env, label, key, baseUrl, provider) {
   const list = await loadKeys(context, env);
-  const k = { id: newId(), label, key };
+  const k = { id: newId(), label, key, ...(baseUrl && { baseUrl, provider }) };
   list.push(k);
   await saveKeys(context, env, list);
   await setActive(context, env, k.id);
@@ -85,6 +103,23 @@ async function envFor(context) {
   return env;
 }
 
+// omp provider id -> base URL, from the active key of each env var that has one.
+async function baseUrlsFor(context) {
+  const urls = {};
+  for (const name of ENVS) {
+    const k = activeKey(context, name, await loadKeys(context, name));
+    if (k?.baseUrl && k.provider) urls[k.provider] = k.baseUrl;
+  }
+  return urls;
+}
+
+// '' when empty, null when not an http(s) URL.
+function normalizeBaseUrl(v) {
+  const s = String(v || '').trim().replace(/\/+$/, '');
+  if (!s) return '';
+  try { return /^https?:$/.test(new URL(s).protocol) ? s : null; } catch { return null; }
+}
+
 // Out of quota / rate limited / out of credit, as opposed to a bad key or a network error.
 const isQuotaError = (status, message) =>
   status === 429 || status === 402 || /rate.?limit|quota|usage limit|exceed|insufficient|credits?\b|too many requests/i.test(message || '');
@@ -114,5 +149,5 @@ async function fetchAccount(provider, key, sessionId) {
 
 module.exports = {
   PROVIDERS, ENVS, providerOf, groupLabel, mask,
-  loadKeys, activeKey, setActive, addKey, updateKeys, nextKey, envFor, isQuotaError, fetchAccount,
+  loadKeys, activeKey, setActive, addKey, updateKeys, nextKey, envFor, baseUrlsFor, normalizeBaseUrl, isQuotaError, fetchAccount,
 };

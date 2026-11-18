@@ -996,7 +996,11 @@
           rm.classList.add('armed');
           setTimeout(() => { delete rm.dataset.armed; rm.classList.remove('armed'); rm.title = 'Remove'; }, 3000);
         };
-        r.append(ren, rm);
+        const url = el('button', 'icon');
+        url.title = 'Base URL';
+        url.appendChild(icon('globe'));
+        url.onclick = () => vscode.postMessage({ type: 'editBaseUrl', env: g.env, id: k.id });
+        r.append(ren, url, rm);
         sec.appendChild(r);
       }
       if (!g.keys.length) sec.appendChild(el('div', 'unote', 'No key yet.'));
@@ -1774,6 +1778,10 @@
         files = [
           { key: 'problems', short: 'problems', label: 'problems', desc: 'errors and warnings from the Problems panel', icon: 'warning' },
           { key: 'terminal', short: 'terminal', label: 'terminal', desc: 'recent output of the active terminal', icon: 'terminal' },
+          { key: 'git', short: 'git', label: 'git', desc: 'uncommitted changes (git status and diff)', icon: 'git-compare' },
+          // Folders ("@src/"): omp sends the folder's file listing. Ahead of files, so "@src" offers the folder first.
+          ...[...new Set(m.list.flatMap((p) => p.split('/').slice(0, -1).map((_, i, a) => a.slice(0, i + 1).join('/') + '/')))].sort()
+            .map((d) => ({ key: d, short: d.split('/').at(-2) + '/', label: d.split('/').at(-2) + '/', desc: d, icon: 'folder' })),
           ...m.list.map((p) => ({ key: p, short: p.split('/').pop(), label: p.split('/').pop(), desc: p.includes('/') ? p : '', icon: 'file' }))];
         if (pk?.kind === 'file') updateInlinePicker();
         break;
