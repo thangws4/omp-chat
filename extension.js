@@ -576,7 +576,10 @@ class ChatProvider {
       ],
       submit: 'Save key', cancel: intro ? 'Skip' : 'Cancel',
     });
-    if (!v?.key?.trim()) return false;
+    if (!v?.key?.trim()) {
+      if (intro) this.post({ type: 'notice', text: 'Have a ChatGPT or Claude plan instead of a key? Sign in with it.', actions: [{ label: 'Sign in…', cmd: 'login' }] });
+      return false;
+    }
     const baseUrl = keys.normalizeBaseUrl(v.baseUrl), usageUrl = keys.normalizeBaseUrl(v.usageUrl);
     if (baseUrl === null || usageUrl === null) {
       this.post({ type: 'error', text: `"${baseUrl === null ? v.baseUrl : v.usageUrl}" is not an http(s) URL; the key was not saved.` });
@@ -700,6 +703,7 @@ class ChatProvider {
         return vscode.workspace.getConfiguration('ompChat').update('thinkingLevel', m.level, vscode.ConfigurationTarget.Global);
       case 'usage': return this.showUsage();
       case 'setApiKey': return this.manageKeys();
+      case 'login': return this.login();
       case 'addKey': return this.addKeyForm(false, m.provider);
       case 'useKey': await this.useKey(m.env, m.id); return m.from === 'keys' ? this.showKeys() : this.showUsage();
       case 'renameKey': return this.renameKey(m.env, m.id, m.label);
@@ -736,6 +740,7 @@ class ChatProvider {
           case 'usage': return this.showUsage();
           case 'history': return this.pickSession();
           case 'installOmp': return this.installOmp();
+          case 'login': return this.login();
           case 'setOmpPath': return this.setOmpPath();
           case 'retry': return this.retry();
           case 'openUrl': return vscode.env.openExternal(vscode.Uri.parse(m.arg));
@@ -853,6 +858,20 @@ class ChatProvider {
     const bunPath = bun || path.join(bunHome(), 'bin', exe('bun')); // a fresh install is not on this shell's PATH yet
     t.sendText(`${isWin ? '& ' : ''}"${bunPath}" install -g ${OMP_PACKAGE}`);
     this.post({ type: 'notice', text: 'Installing omp in the terminal below. Click Retry when it has finished.', actions: [{ label: 'Retry', cmd: 'retry' }] });
+  }
+
+  // Subscription sign-in (ChatGPT, Claude, Copilot…): omp's own OAuth opens the browser and waits for the callback.
+  // The terminal is the omp process itself, so it closes when login ends; a success restarts omp to list the new models.
+  login() {
+    const ompPath = vscode.workspace.getConfiguration('ompChat').get('ompPath') || 'omp';
+    const t = vscode.window.createTerminal({ name: 'omp login', shellPath: (ompPath === 'omp' && this.ompFallback?.omp) || ompPath, shellArgs: ['login'] });
+    t.show();
+    const sub = vscode.window.onDidCloseTerminal((closed) => {
+      if (closed !== t) return;
+      sub.dispose();
+      if (closed.exitStatus?.code === 0) this.restart();
+    });
+    this.post({ type: 'notice', text: 'Pick a provider in the terminal below and finish signing in in your browser. The chat restarts with the new models when it is done.' });
   }
 
   retry() {
@@ -2468,6 +2487,7 @@ function activate(context) {
     vscode.commands.registerCommand('ompChat.plugins', () => current().showPlugins()),
     vscode.commands.registerCommand('ompChat.manageModels', () => current().showModelsSheet()),
     vscode.commands.registerCommand('ompChat.setApiKey', () => current().manageKeys()),
+    vscode.commands.registerCommand('ompChat.login', () => current().login()),
     vscode.commands.registerCommand('ompChat.exportChat', () => current().exportChat()),
     vscode.commands.registerCommand('ompChat.commands', () => current().showCommands()),
     vscode.commands.registerCommand('ompChat.mcp', () => current().showMcp()),

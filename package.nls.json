@@ -7,6 +7,7 @@
   "command.pickModel": "Choose Model…",
   "command.manageModels": "Manage Models…",
   "command.setApiKey": "Set API Key…",
+  "command.login": "Sign in with a subscription (ChatGPT, Claude…)…",
   "command.stop": "Stop Agent",
   "command.exportChat": "Export Chat as Markdown",
   "command.addFile": "Add File to OMP Chat",

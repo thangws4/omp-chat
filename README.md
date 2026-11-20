@@ -114,6 +114,8 @@ Check it with `omp --version`.
 
 The first time you open the panel, a **Connect a model provider** form appears at the top of the chat. Pick a provider, paste a key, and optionally give the key a name (for example `work`). Press **Skip** if omp already has a login of its own; you can add keys later from **…** → **Set API Key…**.
 
+Have a ChatGPT, Claude or Copilot plan instead of a key? **…** → **Sign in with a subscription…** runs `omp login` in a terminal: pick the provider, finish signing in in the browser, and the chat restarts with that plan's models.
+
 | Provider | What you get | Get a key |
 |---|---|---|
 | **OpenCode Go** | $10/month plan with many models (DeepSeek V4.1 Flash, Kimi, GLM, Qwen, MiniMax…). Limits per 5 hours, week and month | [opencode.ai/go](https://opencode.ai/go) |

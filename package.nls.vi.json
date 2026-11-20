@@ -7,6 +7,7 @@
   "command.pickModel": "Chọn model…",
   "command.manageModels": "Quản lý model…",
   "command.setApiKey": "Đặt API key…",
+  "command.login": "Đăng nhập bằng gói thuê bao (ChatGPT, Claude…)…",
   "command.stop": "Dừng agent",
   "command.exportChat": "Xuất cuộc trò chuyện ra Markdown",
   "command.addFile": "Thêm file vào OMP Chat",
