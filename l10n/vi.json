@@ -305,6 +305,8 @@
     "Connect a model provider": "Kết nối nhà cung cấp model",
     "Have a ChatGPT or Claude plan instead of a key? Sign in with it.": "Có gói ChatGPT hoặc Claude thay vì key? Đăng nhập bằng gói đó.",
     "Sign in…": "Đăng nhập…",
+    "Or use a subscription": "Hoặc dùng gói thuê bao",
+    "Sign in with a subscription (ChatGPT, Claude…)…": "Đăng nhập bằng gói thuê bao (ChatGPT, Claude…)…",
     "Pick a provider in the terminal below and finish signing in in your browser. The chat restarts with the new models when it is done.": "Chọn nhà cung cấp trong terminal bên dưới rồi hoàn tất đăng nhập trên trình duyệt. Xong thì chat tự khởi động lại với các model mới.",
     "OMP Chat runs the omp agent with your own API key. Skip this if omp already has a login of its own.": "OMP Chat chạy agent omp bằng API key của bạn. Bỏ qua bước này nếu omp đã có đăng nhập riêng.",
     "Provider": "Nhà cung cấp",

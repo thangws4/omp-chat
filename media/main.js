@@ -1348,6 +1348,12 @@
       }
       scroll.appendChild(chips);
     }
+    // A plan instead of a key (ChatGPT, Claude, Copilot…): omp's own browser sign-in.
+    scroll.appendChild(el('div', 'ush', 'Or use a subscription'));
+    const login = el('button', 'secondary');
+    login.append(icon('account'), el('span', '', 'Sign in with a subscription (ChatGPT, Claude…)…'));
+    login.onclick = () => { closeSheet(); vscode.postMessage({ type: 'login' }); };
+    scroll.appendChild(login);
   }
   function closeDialog(id, answer) {
     const d = dialogs.get(id);

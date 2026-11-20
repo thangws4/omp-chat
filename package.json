@@ -2,7 +2,7 @@
   "name": "omp-chat",
   "displayName": "OMP Chat by DT",
   "description": "AI coding agent chat for VS Code, powered by oh-my-pi (omp), with your own keys for OpenCode, OpenRouter, DeepSeek, Anthropic, OpenAI, Gemini and more.",
-  "version": "0.6.22",
+  "version": "0.7.0",
   "publisher": "dtcode-dev",
   "license": "MIT",
   "repository": {
