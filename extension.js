@@ -775,9 +775,10 @@ class ChatProvider {
 
     // Plan mode is OMP Chat's own (omp's /plan is terminal-only): omp asks for every edit/command and we deny them.
     const mode = cfg.get('approvalMode') === 'plan' ? 'always-ask' : cfg.get('approvalMode');
+    const overlay = this.overlayArgs(); // before systemPromptArgs: it snapshots the ★ pool the prompt lists
     const args = ['--mode', 'rpc', '--model', cfg.get('model'), ...(mode ? ['--approval-mode', mode] : []), `--thinking=${thinkingLevel(cfg)}`,
-      ...(cfg.get('announceSteps', true) ? [`--append-system-prompt=${ANNOUNCE_STEPS}`] : []), // a later one in extraArgs wins
-      ...this.overlayArgs(), ...this.baseUrlArgs(baseUrls), ...cfg.get('extraArgs', [])];
+      ...this.systemPromptArgs(cfg), // a later one in extraArgs wins
+      ...overlay, ...this.baseUrlArgs(baseUrls), ...cfg.get('extraArgs', [])];
     const ompPath = cfg.get('ompPath') || 'omp';
     const fallback = ompPath === 'omp' ? this.ompFallback : null;
     const command = fallback ? fallback.omp : ompPath;
@@ -1354,20 +1355,31 @@ class ChatProvider {
     }
   }
 
-  // "Split across subagents", told which models it may hand tasks to.
-  delegatePrompt() {
+  // "Split across subagents": the models it may use are already in the system prompt (delegationGuide).
+  delegatePrompt() { return DELEGATE_PLAN; }
+
+  // In every chat, the lead may hand tasks to your models (★) and decides by itself when that helps.
+  // Reads this.taskPool, so overlayArgs() runs first.
+  delegationGuide() {
     const pool = this.taskPool || [];
-    if (pool.length < 2) return DELEGATE_PLAN;
+    if (pool.length < 2) return '';
     const info = new Map((this.modelsCache || []).map((m) => [m.id, m]));
     const line = (id, i) => {
       const m = info.get(id);
       const tags = [i === 0 && 'the current model', m?.free && 'free', m?.plan && 'subscription plan'].filter(Boolean);
       return `- ${id}${m?.name ? ` (${m.name})` : ''}${tags.length ? ` — ${tags.join(', ')}` : ''}`;
     };
-    return `${DELEGATE_PLAN}\n\nPick the model for each task with the task item's \`model\` field (exact id, optionally with \`:low\`, \`:medium\` or \`:high\` `
+    return '# Delegating\nSplit work into subagent tasks when it helps; you decide. '
+      + `Pick the model for each task with the task item's \`model\` field (exact id, optionally with \`:low\`, \`:medium\` or \`:high\` `
       + `for its thinking effort), choosing from these models the user approved:\n${pool.map(line).join('\n')}\n`
       + 'Match the model to the task: the strongest for design, tricky debugging or changes across many files; a faster or cheaper one '
       + 'for search, renames, docs, tests to fill in or small edits. In the summary, say which model did each task.';
+  }
+
+  // omp keeps only one --append-system-prompt, so the step announcements and the delegation guide share it.
+  systemPromptArgs(cfg) {
+    const text = [cfg.get('announceSteps', true) && ANNOUNCE_STEPS, this.delegationGuide()].filter(Boolean).join('\n\n');
+    return text ? [`--append-system-prompt=${text}`] : [];
   }
 
   // Every skill omp can load here (`omp skill list --json`, run in the workspace), cached per session.

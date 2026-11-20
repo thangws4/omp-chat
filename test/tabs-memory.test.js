@@ -131,11 +131,24 @@ const { chats, openTab, closeWorktree, newWorktreeChat } = require('../extension
   const overlay = JSON.parse(fs.readFileSync(args[1], 'utf8'));
   assert.deepStrictEqual(overlay, { task: { perCallModel: 'on' },
     modelRoles: { ompchat1: 'deepseek/deepseek-v4-flash', ompchat2: 'deepseek/deepseek-v4-pro', ompchat3: 'openrouter/x/y:free' } });
+  // every chat: the lead is told the pool in its system prompt and decides by itself when to split
+  const sys = () => { provider.overlayArgs(); return provider.systemPromptArgs(vsStub.workspace.getConfiguration('ompChat')); };
+  let sp = sys();
+  assert.strictEqual(sp.length, 1);
+  assert.match(sp[0], /^--append-system-prompt=# Keeping the user informed/);
+  assert.match(sp[0], /Split work into subagent tasks when it helps; you decide\./);
+  assert.match(sp[0], /`model` field/);
+  assert.match(sp[0], /- deepseek\/deepseek-v4-flash — the current model\n- deepseek\/deepseek-v4-pro\n- openrouter\/x\/y:free \(Y\) — free\n/);
+  cfgSet.announceSteps = false;
+  sp = sys();
+  assert.strictEqual(sp.length, 1);
+  assert.doesNotMatch(sp[0], /Keeping the user informed/);
+  assert.match(sp[0], /you decide/);
   await provider.onWebviewMessage({ type: 'executePlan', mode: 'write', delegate: true });
   provider.busy = false;
   await provider.afterRestart();
-  assert.match(sent, /`model` field/);
-  assert.match(sent, /- deepseek\/deepseek-v4-flash — the current model\n- deepseek\/deepseek-v4-pro\n- openrouter\/x\/y:free \(Y\) — free\n/);
+  assert.match(sent, /delegating it\./);
+  assert.doesNotMatch(sent, /`model` field/, 'the pool is in the system prompt, not repeated');
   // skills switched off ride in the same overlay
   await ctx.workspaceState.update('ompChat.disabledSkills', ['tdd']);
   assert.deepStrictEqual(JSON.parse(fs.readFileSync(provider.overlayArgs()[1], 'utf8')).disabledExtensions, ['skill:tdd']);
@@ -144,6 +157,10 @@ const { chats, openTab, closeWorktree, newWorktreeChat } = require('../extension
   provider.busy = false;
   await provider.afterRestart();
   assert.match(sent, /Go ahead and implement the plan above\.$/);
+  // no models of yours and no step announcements: no system prompt flag at all
+  await ctx.globalState.update('ompChat.favoriteModels', []);
+  assert.deepStrictEqual(sys(), []);
+  delete cfgSet.announceSteps;
   vsStub.workspace.getConfiguration = getCfg;
   await ctx.workspaceState.update('ompChat.disabledSkills', []);
 
