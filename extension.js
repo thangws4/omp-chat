@@ -394,7 +394,8 @@ class ChatProvider {
     view.webview.onDidReceiveMessage((m) => this.onWebviewMessage(m));
     view.onDidDispose(() => { this.view = null; });
     view.onDidChangeVisibility?.(() => { // looking at the panel clears "done, not seen yet"
-      if (view.visible) { this.unseenDone = false; this.refreshStatus(); }
+      // and brings the quota up to date (at most one provider call a minute: account() caches)
+      if (view.visible) { this.unseenDone = false; this.refreshStatus(); this.refreshMeter(); }
     });
     this.boot();
   }
@@ -650,6 +651,7 @@ class ChatProvider {
     }));
     // omp only sees the base URL: a usage URL change needs no restart
     if (keys.activeKey(this.context, env, list)?.id === id && (baseUrl || '') !== (k.baseUrl || '')) await this.restart();
+    else { this.accountCache = null; this.refreshMeter(); } // a new usage URL shows in the toolbar right away
     this.showKeys();
   }
 
