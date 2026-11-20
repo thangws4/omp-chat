@@ -492,11 +492,14 @@ class ChatProvider {
     this.map?.agentActivity(p.id);
   }
 
-  // What the Subagents tab draws: the lead (your latest message) and every subagent of this run.
+  // What the Subagents tab draws: the lead (your latest message) and the subagents of this run, i.e. started since
+  // that message or still running from an earlier one.
   mapState() {
-    const pick = ({ id, key, agent, task, status, model, intent, tool, toolArgs, tools, steps, startedAt, endedAt, parentAgent }) =>
-      ({ id, key, agent, task, status, model, intent, tool, toolArgs, tools, steps, startedAt, endedAt, parentAgent });
-    return { lead: this.lead, agents: [...this.subagents.values()].map(pick), now: Date.now() };
+    const since = this.lead?.startedAt || 0;
+    const pick = ({ id, agent, task, status, model, intent, tool, toolArgs, tools, steps, startedAt, endedAt, parentAgent }) =>
+      ({ id, agent, task, status, model, intent, tool, toolArgs, tools, steps, startedAt, endedAt, parentAgent });
+    const agents = [...this.subagents.values()].filter((s) => s.status === 'running' || s.startedAt >= since);
+    return { lead: this.lead, agents: agents.map(pick), now: Date.now() };
   }
 
   // The subagent's own conversation (works after it finished too), simplified for the map's chat pane.
@@ -1595,7 +1598,14 @@ class ChatProvider {
       this.queued.delete(qid);
       this.post({ type: 'dequeued', qid });
       this.post({ type: 'user', text: q.text, context: q.context, images: q.images, turn: ++this.turnSeq });
+      this.startRun(q.text);
     }
+  }
+
+  // Your message reached the agent: the subagent map's lead now works on it (a new run).
+  startRun(text) {
+    this.lead = { task: summaryLine(text), model: String(vscode.workspace.getConfiguration('ompChat').get('model') || ''), startedAt: Date.now(), endedAt: null };
+    this.map?.update();
   }
 
   // "Send now": hand the message to the running turn instead of waiting for it to end.
@@ -2246,10 +2256,7 @@ class ChatProvider {
     }
     // Slash commands are not conversation messages in omp, so they get no turn number (no Rewind).
     this.post({ type: 'user', ...shown, turn: isCommand ? 0 : ++this.turnSeq });
-    if (!isCommand) {
-      this.lead = { task: summaryLine(text), model: String(vscode.workspace.getConfiguration('ompChat').get('model') || ''), startedAt: Date.now(), endedAt: null };
-      this.map?.update();
-    }
+    if (!isCommand) this.startRun(text);
     if (picked.length) this.post({ type: 'notice', text: `Auto-picked skills: ${picked.map((s) => s.name).join(', ')}` });
     client.prompt(message, this.busy ? 'followUp' : undefined, isCommand ? undefined : images);
     this.busy = true;

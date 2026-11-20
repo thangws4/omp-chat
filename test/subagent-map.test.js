@@ -121,6 +121,17 @@ const { activate } = require('./helper');
   prog('A', { recentTools: [{ tool: 'edit', args: 'c.ts' }], toolCount: 10 });
   assert.ok(panel.posted.length > states);
 
+  // your next message starts a new run: finished agents of the last one leave the map, running ones stay
+  life('C', 'completed');
+  await new Promise((r) => setTimeout(r, 5));
+  await provider.send('Now the tests', false); // the agent is busy: queued first
+  assert.strictEqual(provider.lead.task, 'Add login', 'not delivered yet');
+  provider.onRecord({ type: 'queue_update', steering: [], followUp: [] }); // delivered
+  assert.strictEqual(provider.lead.task, 'Now the tests');
+  assert.deepStrictEqual(provider.mapState().agents.map((x) => x.id).sort(), ['A', 'A1'], 'B and C finished in the last run');
+  life('D', 'started', 'c9');
+  assert.ok(provider.mapState().agents.some((x) => x.id === 'D'));
+
   // a new conversation clears the map
   await provider.newSession?.();
   assert.strictEqual(provider.mapState().agents.length, 0);
