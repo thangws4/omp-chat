@@ -138,12 +138,23 @@ async function fetchAccount(provider, key, sessionId, usageUrl) {
   if (!key) return null;
   const get = async (url, headers) => {
     const r = await fetch(url, { headers: { Authorization: `Bearer ${key}`, ...headers }, signal: AbortSignal.timeout(8000) });
-    if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+    if (!r.ok) { // the server's own reason ("key not found", "no such route") tells a wrong URL from a wrong key
+      const why = String(await r.text?.().catch(() => '') || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+      throw new Error(`${r.status} ${r.statusText}${why ? ' — ' + why : ''}`);
+    }
     return r.json();
   };
   try {
     // ponytail: shown as raw name/value rows; parse a gateway's fields when one deserves a gauge.
-    if (usageUrl) return { provider, custom: flatten(await get(usageUrl.replaceAll('{key}', encodeURIComponent(key)), { 'x-api-key': key })).slice(0, 20) };
+    if (usageUrl) {
+      const rows = flatten(await get(usageUrl.replaceAll('{key}', encodeURIComponent(key)), { 'x-api-key': key }))
+        // nothing to show, or a key the gateway echoes back (apiKey, gatewayKey): never reaches the panel
+        .filter(([n, v]) => v !== 'null' && v !== '' && !/key$/i.test(n) && !v.includes(key) && !/^sk-\S{12,}$/.test(v));
+      // The first top-level "…Used" and "…Limit" numbers (tokensUsed / tokenLimit) make the bar.
+      const top = (re) => rows.find(([n, v]) => !n.includes('.') && re.test(n) && Number.isFinite(+v))?.[1];
+      const used = top(/used$/i), limit = top(/limit$/i);
+      return { provider, custom: rows.slice(0, 40), ...(used != null && +limit > 0 && { gauge: { used: +used, limit: +limit } }) };
+    }
     if (provider === 'openrouter') return { provider, ...(await get('https://openrouter.ai/api/v1/key')).data };
     if (provider === 'deepseek') return { provider, ...(await get('https://api.deepseek.com/user/balance')) };
     if (provider === 'opencode-go') {

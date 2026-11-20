@@ -131,7 +131,7 @@ The first time you open the panel, a **Connect a model provider** form appears a
 
 **Base URL (optional).** Fill it in to send that key's requests to a proxy, gateway or other compatible endpoint (for example `https://my-proxy.example.com/v1`) instead of the provider's own. It belongs to the key: it applies while that key is active, and the key list shows it next to the key. To change or clear it later, use the 🌐 button on the key in the key list.
 
-**Usage URL (optional).** A gateway's own endpoint for the key's quota, with `{key}` where the key goes. For example, a Zyloris key uses base URL `https://claude.zyloris.com/v1` and usage URL `https://claude.zyloris.com/api/check-usage/{key}`. **Usage & limits** then shows what that endpoint returns, under **Gateway usage**. The key is also sent as `Authorization: Bearer` and `x-api-key` headers. Set or change it with the same 🌐 button.
+**Usage URL (optional).** A gateway's own endpoint for the key's quota, with `{key}` where the key goes. For example, a Zyloris key uses base URL `https://claude.zyloris.com/v1` and usage URL `https://zyloris.com/api/gateway/subscription/check?apiKey={key}`. **Usage & limits** then shows what that endpoint returns, under **Gateway usage**; any key the gateway sends back is left out. The key is also sent as `Authorization: Bearer` and `x-api-key` headers. Set or change it with the same 🌐 button.
 
 **OpenCode Go and Zen** use the same OpenCode key (create it at [opencode.ai/console](https://opencode.ai/console) with the **Models: Request** permission, plus **Usage: Read** for the usage panel). Every `opencode-go/…` model needs the Go subscription, including the ones whose names end in `-free`; the model list marks them **Go plan**.
 
@@ -345,7 +345,7 @@ Open it with the 📊 button in the title bar or the context ring in the toolbar
 | Today (UTC) | OpenRouter free-model requests used out of your daily quota |
 | OpenRouter account | Credits used today / this month / in total, key limit |
 | DeepSeek account | Balance |
-| Gateway usage | For a key with a usage URL: each field the gateway returns, percentages as bars |
+| Gateway usage | For a key with a usage URL: plan and status, a token bar (from `…Used` / `…Limit` fields) with its reset, days until the plan expires, and why the key is blocked if it is; every other field under **Details**. The toolbar shows `quota 22%` |
 | API keys | Every saved key of the current provider with its limits as badges (red when full); click a key to switch to it |
 
 Account figures need the key saved in OMP Chat (keys that only omp knows about cannot be read).

@@ -51,7 +51,16 @@ const ctx = { secrets: { get: async (k) => sec.get(k), store: async (k, v) => se
   assert.strictEqual(seen.url, 'https://gw.local/api/check-usage/sk-z%2F1');
   assert.strictEqual(seen.h['x-api-key'], 'sk-z/1');
   assert.deepStrictEqual(acc.custom, [['ok', 'true'], ['quota.used', '3'], ['quota.limit', '10'], ['tags.0', 'a']]);
-  global.fetch = async () => ({ ok: false, status: 401, statusText: 'Unauthorized' });
-  assert.deepStrictEqual(await keys.fetchAccount('anthropic', 'k', 's', gw.usageUrl), { provider: 'anthropic', error: '401 Unauthorized' });
+  assert.strictEqual(acc.gauge, undefined, 'nested used/limit: no bar');
+  // Zyloris' shape: keys echoed back and nulls are dropped, tokensUsed / tokenLimit become the bar
+  const zk = 'sk-0000aaaa1111bbbb2222cccc3333dddd';
+  global.fetch = async () => ({ ok: true, json: async () => ({ found: true, apiKey: zk, errorCode: null, tokensUsed: 1200, tokenLimit: 700000,
+    note: `for ${zk}`, gatewayKeys: [{ gatewayKey: 'sk-other0000111122223333', resetIntervalHours: 5 }] }) });
+  const z = await keys.fetchAccount('anthropic', zk, 's', 'https://zyloris.com/api/gateway/subscription/check?apiKey={key}');
+  assert(!/sk-/.test(JSON.stringify(z)), 'no key reaches the panel, not even masked');
+  assert.deepStrictEqual(z.custom.map(([n]) => n), ['found', 'tokensUsed', 'tokenLimit', 'gatewayKeys.0.resetIntervalHours']);
+  assert.deepStrictEqual(z.gauge, { used: 1200, limit: 700000 });
+  global.fetch = async () => ({ ok: false, status: 404, statusText: 'Not Found', text: async () => '{"error":"Not found"}' });
+  assert.deepStrictEqual(await keys.fetchAccount('anthropic', 'k', 's', gw.usageUrl), { provider: 'anthropic', error: '404 Not Found — {"error":"Not found"}' });
   assert.strictEqual(await keys.fetchAccount('anthropic', 'k', 's'), null, 'no usage URL: no API');
 })().catch((e) => { console.error(e); process.exit(1); });

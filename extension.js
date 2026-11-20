@@ -112,7 +112,7 @@ const DELEGATE_PLAN = 'Carry out the plan above by delegating it. Give each numb
   + 'When they are done, review their changes together, fix conflicts or gaps yourself, run the relevant checks or tests, '
   + 'and finish with a short summary per task.';
 const USAGE_DAY = 'ompChat.usageDay';       // globalState: model requests sent from this extension today (UTC)
-const USAGE_URL_HINT = "Gateway's usage endpoint, {key} = the key; e.g. https://claude.zyloris.com/api/check-usage/{key}";
+const USAGE_URL_HINT = "Gateway's usage endpoint, {key} = the key; e.g. https://zyloris.com/api/gateway/subscription/check?apiKey={key}";
 const utcDay = () => new Date().toISOString().slice(0, 10); // OpenRouter's free-model quota resets at 00:00 UTC
 
 // Undo what send() prepends ("[Note: …]" lines, selection / current-file context) for display.
@@ -1699,7 +1699,7 @@ class ChatProvider {
         actions: [{ label: 'Compact now', cmd: 'compact' }] });
     } else if (pct < 50) this.ctxWarned = false;
     this.post({ type: 'meter', context: state?.contextUsage || null, free: /:free$/.test(this.modelName || ''),
-      today: this.today(), freeQuota: account?.free_model_daily_requests || null, windows: account?.windows || null });
+      today: this.today(), freeQuota: account?.free_model_daily_requests || null, windows: account?.windows || null, gauge: account?.gauge || null });
   }
 
   async showUsage() {

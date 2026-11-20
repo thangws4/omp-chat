@@ -1394,6 +1394,53 @@
     sec.appendChild(r);
   }
   const level = (frac) => (frac >= 0.9 ? 'full' : frac >= 0.75 ? 'warn' : 'ok');
+  // A gateway's usage JSON (the key's usage URL), read for the fields most gateways share: plan and status,
+  // used / limit, reset, expiry, why it is blocked. The rest goes under Details, closed.
+  function gatewayUsage(sec, a) {
+    const shown = new Set();
+    const pick = (re, any) => { // top-level field (or any depth) whose last name part matches; each is shown once
+      const r = a.custom.find(([k]) => !shown.has(k) && (any || !k.includes('.')) && re.test(k.split('.').pop()));
+      if (r) shown.add(r[0]);
+      return r?.[1];
+    };
+    if (!a.custom.length) return note(sec, 'The usage URL returned nothing.');
+    if (pick(/^found$/i) === 'false') note(sec, 'The gateway does not know this key.').classList.add('bad');
+    const plan = pick(/^(product|plan|package|tier|name)$/i), status = pick(/^status$/i);
+    if (plan || status) {
+      const head = el('div', 'uwhead gwhead');
+      head.append(el('span', 'uwlabel', plan || 'Subscription'), el('span', 'spacer'));
+      if (status) head.appendChild(el('span', 'tpill ' + (/^(active|ok|valid|enabled)$/i.test(status) ? 'completed' : 'failed'), status));
+      sec.appendChild(head);
+    }
+    const reset = pick(/reset/i, true);
+    const resetText = !reset ? '' : /hours?$/i.test([...shown].pop()) ? `resets every ${reset}h` : Date.parse(reset) ? resetsIn(reset) : '';
+    if (a.gauge) {
+      pick(/used$/i); pick(/limit$/i);
+      const g = a.gauge, frac = g.used / g.limit, r = el('div', 'uwin'), head = el('div', 'uwhead');
+      head.append(el('span', 'uwlabel', 'Tokens'), el('span', 'spacer'), el('span', 'uwpct ' + level(frac), `${gaugePct(g)}%`));
+      r.append(head, bar(frac), el('div', 'uwsub', [`${num(g.used)} of ${num(g.limit)} used`, resetText].filter(Boolean).join(' · ')));
+      sec.appendChild(r);
+    } else if (resetText) line(sec, 'Reset', resetText);
+    const exp = pick(/expire/i);
+    if (exp && Date.parse(exp)) {
+      const days = Math.ceil((Date.parse(exp) - Date.now()) / 864e5);
+      line(sec, 'Expires', new Date(exp).toLocaleDateString(), el('span', 'uwpct ' + (days <= 3 ? 'full' : days <= 7 ? 'warn' : ''), days > 0 ? `${days} days left` : 'expired'));
+    }
+    // trouble: a true flag (blocked, limit hit) or a reason / error text
+    for (const [k, v] of a.custom) {
+      if (shown.has(k) || k.includes('.')) continue;
+      const flag = v === 'true' && /block|limit|exceed|suspend|disabled|hit/i.test(k), why = /reason|error|message/i.test(k);
+      if (flag || why) { shown.add(k); note(sec, flag ? k : `${k}: ${v}`).classList.add('bad'); }
+    }
+    const rest = a.custom.filter(([k]) => !shown.has(k));
+    if (rest.length) {
+      const more = el('details', 'gwmore');
+      const grid = el('div', 'gwgrid'); // <details> itself does not lay its children out as a grid
+      more.append(el('summary', '', 'Details'), grid);
+      for (const [k, v] of rest) line(grid, k, v);
+      sec.appendChild(more);
+    }
+  }
   // A big number with its name and a detail line, for "This chat".
   function tile(grid, value, label, sub, extra) {
     const t = el('div', 'utile');
@@ -1404,12 +1451,14 @@
     t.title = [value, label, sub].filter(Boolean).join('\n'); // the detail line can be cut short in a narrow tile
     grid.appendChild(t);
   }
+  const gaugePct = (g) => Math.min(100, Math.round((g.used / g.limit) * 100));
   // Short limit badges for a key in the list: "5h 37%", "week 84%", "full".
   function keyBadges(a) {
     const out = [];
     const w = a?.windows;
     if (w?.rolling) out.push([w.rolling.status === 'rate-limited' ? '5h full' : `5h ${w.rolling.percent}%`, level(w.rolling.status === 'rate-limited' ? 1 : w.rolling.percent / 100)]);
     if (w?.weekly) out.push([`week ${w.weekly.percent ?? '?'}%`, level((w.weekly.percent ?? 0) / 100)]);
+    if (a?.gauge) out.push([`${gaugePct(a.gauge)}% used`, level(a.gauge.used / a.gauge.limit)]);
     if (!out.length && keySummary(a)) out.push([keySummary(a), a?.error ? 'full' : '']);
     return out.map(([text, lvl]) => el('span', 'ubadge ' + lvl, text));
   }
@@ -1436,6 +1485,11 @@
       parts.push(`5h ${r.status === 'rate-limited' ? 'full' : r.percent + '%'}`);
       tip.push(`Plan: ${r.percent}% of the 5-hour window used, ${resetsIn(r.resetsAt)}`);
     }
+    const g = m.gauge; // a gateway's tokensUsed / tokenLimit, from the key's usage URL
+    if (g) {
+      parts.push(`quota ${gaugePct(g)}%`);
+      tip.push(`Gateway: ${num(g.used)} of ${num(g.limit)} used`);
+    }
     // Context fill as a small ring, like Claude Code's context indicator; the numbers are in the tooltip.
     const ring = $('ring');
     ring.hidden = !m.context;
@@ -1452,7 +1506,7 @@
     $('meterText').textContent = parts.join(' · ');
     $('meter').title = [...tip, 'Click for usage & limits'].join('\n');
     $('meter').hidden = !parts.length && !m.context;
-    $('meter').classList.toggle('warn', (!!m.context && m.context.percent >= 80) || (!!r && (r.percent >= 80 || r.status === 'rate-limited')));
+    $('meter').classList.toggle('warn', (!!m.context && m.context.percent >= 80) || (!!r && (r.percent >= 80 || r.status === 'rate-limited')) || (!!g && gaugePct(g) >= 80));
   }
 
   function section(panel, title) {
@@ -1469,7 +1523,7 @@
     r.appendChild(v);
     sec.appendChild(r);
   }
-  function note(sec, text) { sec.appendChild(el('div', 'unote', text)); }
+  function note(sec, text) { return sec.appendChild(el('div', 'unote', text)); }
 
   function showUsage(m) {
     const panel = openSheet('Usage & limits', 'graph', () => vscode.postMessage({ type: 'usage' }));
@@ -1502,14 +1556,8 @@
     if (a?.provider) {
       const names = { openrouter: 'OpenRouter account', deepseek: 'DeepSeek account', 'opencode-go': 'OpenCode Go plan', 'opencode-zen': 'OpenCode Zen' };
       const acc = section(panel, a.custom ? 'Gateway usage' : names[a.provider] || a.provider);
-      if (a.custom) { // the key's usage URL answered: its JSON as rows, percentages as bars
-        for (const [k, v] of a.custom) {
-          const n = Number(v);
-          if (/percent|pct/i.test(k) && v !== '' && n >= 0 && n <= 100) line(acc, k, bar(n / 100), `${n}%`);
-          else line(acc, k, v);
-        }
-        if (!a.custom.length) note(acc, 'The usage URL returned nothing.');
-      } else if (a.windows) {
+      if (a.custom) gatewayUsage(acc, a);
+      else if (a.windows) {
         for (const [k, label] of WINDOWS) windowLine(acc, label, a.windows[k]);
       } else if (a.noApi) {
         note(acc, 'This provider has no usage API; limits show up as errors when reached.');

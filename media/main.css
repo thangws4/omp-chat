@@ -524,8 +524,9 @@ textarea.cinput { font-family: var(--vscode-editor-font-family); }
 .usec { margin-top: 8px; }
 .ush { font-size: .85em; text-transform: uppercase; letter-spacing: .04em; color: var(--vscode-descriptionForeground); margin-bottom: 2px; }
 .urow { display: flex; gap: 8px; padding: 2px 0; }
-.ulabel { flex: none; width: 92px; color: var(--vscode-descriptionForeground); }
-.uval { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* long field names (a gateway's "gatewayKeys.0.orderCode") take up to 45% and wrap instead of running into the value */
+.ulabel { flex: none; min-width: 92px; max-width: 45%; overflow-wrap: anywhere; color: var(--vscode-descriptionForeground); }
+.uval { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; overflow-wrap: anywhere; }
 .unote { color: var(--vscode-descriptionForeground); font-size: .92em; margin: 2px 0 4px; line-height: 1.4; }
 .usec button { margin-top: 2px; }
 .bar { flex: 1; max-width: 140px; height: 6px; border-radius: 3px; overflow: hidden; background: var(--vscode-widget-border, var(--vscode-panel-border)); }
@@ -553,6 +554,17 @@ textarea.cinput { font-family: var(--vscode-editor-font-family); }
 .uwpct.full { color: var(--vscode-errorForeground, #e5534b); }
 .uwin .bar { max-width: none; height: 8px; border-radius: 4px; margin: 4px 0 3px; }
 .uwsub { font-size: .85em; color: var(--vscode-descriptionForeground); }
+/* gateway usage (a key's usage URL): plan + status pill, token bar, the rest folded under Details */
+.gwhead { align-items: center; padding: 4px 0 2px; }
+.unote.bad { color: var(--vscode-errorForeground); }
+.gwmore { margin-top: 6px; }
+.gwgrid { display: grid; grid-template-columns: minmax(0, max-content) 1fr; column-gap: 10px; }
+.gwmore > summary { font-size: .85em; color: var(--vscode-descriptionForeground); padding: 2px 0; }
+.gwmore .urow { display: contents; }
+.gwmore .ulabel { min-width: 0; max-width: none; padding: 2px 0; }
+.gwmore > summary::before { content: '▸ '; }
+.gwmore[open] > summary::before { content: '▾ '; }
+.gwmore .urow { font-size: .92em; }
 .kbadges { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
 .ubadge { font-size: .8em; padding: 0 6px; border-radius: 8px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
   color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; }
