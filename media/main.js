@@ -401,7 +401,7 @@
       b.onclick = onclick;
       c._head.appendChild(b);
     };
-    btn('eye', 'View its conversation', () => vscode.postMessage({ type: 'subagentView', id: m.id }));
+    btn('type-hierarchy-sub', 'Open in the subagent map (its conversation, live)', () => vscode.postMessage({ type: 'openMap', id: m.id }));
     if (m.status === 'running') {
       btn('comment-discussion', 'Send it an instruction', () => toggleSteer(c, m.id));
       btn('debug-stop', 'Stop this subagent', () => vscode.postMessage({ type: 'subagentStop', id: m.id }));
@@ -439,7 +439,13 @@
     bar.textContent = '';
     if (!items.length) { bar.hidden = true; return; }
     const running = items.filter((m) => m.status === 'running').length;
-    bar.appendChild(el('div', 'ahead', `Subagents · ${running ? `${running} running` : 'all finished'}`));
+    const head = el('div', 'ahead');
+    const open = el('button', 'icon');
+    open.title = 'Open the subagent map';
+    open.append(icon('type-hierarchy-sub'), el('span', '', 'Open map'));
+    open.onclick = () => vscode.postMessage({ type: 'openMap' });
+    head.append(el('span', '', `Subagents · ${running ? `${running} running` : 'all finished'}`), el('span', 'spacer'), open);
+    bar.appendChild(head);
     for (const m of items) {
       const r = el('button', 'arow ' + m.status);
       const [ic, mod] = SUB_ICON[m.status] || SUB_ICON.running;
@@ -452,46 +458,6 @@
     bar.hidden = false;
   }
 
-  // A subagent's own conversation, read-only, in the sheet.
-  function showSubagentTranscript(m) {
-    const s = openSheet(`${m.id} · ${m.agent || 'subagent'}`, 'hubot', () => vscode.postMessage({ type: 'subagentView', id: m.id }));
-    s.classList.add('transcript');
-    // status: running (with the loader), completed, failed…
-    const st = el('div', 'tstatus');
-    const pill = el('span', 'tpill ' + (m.status || ''));
-    if (m.status === 'running') pill.appendChild(spark());
-    else pill.appendChild(icon(m.status === 'completed' ? 'pass-filled' : m.status === 'failed' ? 'error' : 'circle-slash'));
-    pill.appendChild(el('span', '', m.status === 'running' ? 'Running' : m.status || ''));
-    st.append(pill, el('span', 'unote', `${m.messages.length} messages${m.status === 'running' ? ' · refresh to follow it' : ''}`));
-    s.appendChild(st);
-    const box = el('div', 'tscroll');
-    const item = (kind, ...kids) => { const d = el('div', 'tl ' + kind); d.append(...kids); box.appendChild(d); return d; };
-    for (const x of m.messages) {
-      if (x.role === 'task') { // what it was asked to do: open, as a card
-        const d = el('details', 'tbrief');
-        d.open = true;
-        const sum = el('summary');
-        sum.append(icon('target'), el('span', '', 'Task'));
-        d.append(sum, el('pre', 'out', x.text));
-        box.appendChild(d);
-      } else if (x.role === 'assistant') {
-        if (x.text?.trim()) { const t = el('div', 'md'); t.innerHTML = md.render(x.text); item('say', t); }
-        for (const t of x.tools || []) {
-          const verb = (VERBS[t.name] || [t.name, t.name])[1];
-          item('call', icon('tools'), el('span', 'tverb', verb), el('code', 'targ', t.detail || ''));
-        }
-      } else {
-        const d = el('details', 'tmsg' + (x.isError ? ' err' : ''));
-        const sum = el('summary');
-        sum.append(icon(x.isError ? 'error' : 'output'), el('span', '', `${x.name} output`), el('span', 'tlen', `${String(x.text || '').split('\n').length} lines`));
-        d.append(sum, el('pre', 'out', x.text));
-        item('out' + (x.isError ? ' err' : ''), d);
-      }
-    }
-    if (!m.messages.length) box.appendChild(el('div', 'sempty', 'Nothing yet.'));
-    s.appendChild(box);
-    if (m.status === 'running') box.scrollTop = box.scrollHeight; // follow the latest step
-  }
 
   const VERBS = { // [while running, when done]
     read: ['Reading', 'Read'], edit: ['Editing', 'Edited'], write: ['Creating', 'Created'], bash: ['Running', 'Ran'],
@@ -2315,7 +2281,6 @@
       case 'commandsSheet': showCommandsSheet(m); break;
       case 'mcpSheet': showMcpSheet(m); break;
       case 'subagent': renderSubagent(m); break;
-      case 'subagentTranscript': showSubagentTranscript(m); break;
     }
   });
 

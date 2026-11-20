@@ -95,6 +95,12 @@
         "category": "OMP Chat"
       },
       {
+        "command": "ompChat.subagentMap",
+        "title": "%command.subagentMap%",
+        "category": "OMP Chat",
+        "icon": "$(type-hierarchy-sub)"
+      },
+      {
         "command": "ompChat.stop",
         "title": "%command.stop%",
         "category": "OMP Chat"

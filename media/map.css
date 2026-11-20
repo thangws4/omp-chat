@@ -1,0 +1,97 @@
+/* The Subagents tab: an org-chart tree, and one agent's conversation on the right (wide tab) or below (narrow tab). */
+:root { --line: var(--vscode-panel-border, #555); --muted: var(--vscode-descriptionForeground); --card: var(--vscode-editorWidget-background, var(--vscode-sideBar-background)); }
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--vscode-editor-background); color: var(--vscode-foreground); font: var(--vscode-font-size, 13px)/1.45 var(--vscode-font-family); overflow: hidden; }
+button { font: inherit; color: inherit; }
+.spacer { flex: 1; }
+.muted { color: var(--muted); }
+.codicon { font-size: 14px; }
+.codicon-pass-filled { color: var(--vscode-testing-iconPassed, #73c991); }
+.codicon-error { color: var(--vscode-testing-iconFailed, #f48771); }
+.codicon-loading { color: var(--vscode-progressBar-background, #4fc1ff); }
+button.icon { background: none; border: 0; padding: 3px; border-radius: 4px; cursor: pointer; display: inline-flex; }
+button.icon:hover { background: var(--vscode-toolbar-hoverBackground); }
+
+/* layout: narrow = tree above, grip, pane below; wide = tree left, pane right */
+#app { --pane-h: 45vh; height: 100vh; display: grid; grid-template-columns: 100%; grid-template-rows: auto minmax(0, 1fr); grid-template-areas: "top" "tree"; }
+#app.open { grid-template-rows: auto minmax(0, 1fr) auto var(--pane-h); grid-template-areas: "top" "tree" "grip" "pane"; }
+@media (min-width: 900px) {
+  #app.open { grid-template-columns: minmax(0, 1fr) minmax(340px, 40%); grid-template-rows: auto minmax(0, 1fr); grid-template-areas: "top top" "tree pane"; }
+  #app.open #grip { display: none; }
+  #app.open #pane { border-top: 0; border-left: 1px solid var(--line); }
+}
+#top { grid-area: top; display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+#tree { grid-area: tree; overflow: auto; padding: 18px 14px 30px; }
+#grip { grid-area: grip; height: 6px; cursor: row-resize; border-top: 1px solid var(--line); background: var(--vscode-editor-background); }
+#grip:hover { background: var(--vscode-sash-hoverBorder, var(--vscode-focusBorder)); }
+#pane { grid-area: pane; display: flex; flex-direction: column; min-height: 0; border-top: 1px solid var(--line); }
+#pane[hidden], #grip[hidden] { display: none; }
+.empty { color: var(--muted); text-align: center; max-width: 420px; margin: 18px auto 0; }
+
+/* the tree (classic CSS org chart: connectors drawn by each li's ::before / ::after) */
+.org { width: max-content; min-width: 100%; display: flex; justify-content: center; }
+.org ul { display: flex; justify-content: center; margin: 0; padding: 18px 0 0; position: relative; }
+.org > ul { padding-top: 0; }
+.org li { list-style: none; position: relative; padding: 18px 6px 0; display: flex; flex-direction: column; align-items: center; }
+.org > ul > li { padding-top: 0; }
+.org li::before, .org li::after { content: ""; position: absolute; top: 0; right: 50%; width: 50%; height: 18px; border-top: 1px solid var(--line); }
+.org li::after { right: auto; left: 50%; border-left: 1px solid var(--line); }
+.org li:only-child::before, .org li:only-child::after, .org > ul > li::before, .org > ul > li::after { display: none; }
+.org li:only-child { padding-top: 0; }
+.org li:first-child::before, .org li:last-child::after { border: 0 none; }
+.org li:last-child::before { border-right: 1px solid var(--line); border-radius: 0 6px 0 0; }
+.org li:first-child::after { border-radius: 6px 0 0 0; }
+.org ul ul::before { content: ""; position: absolute; top: 0; left: 50%; height: 18px; border-left: 1px solid var(--line); }
+
+.node { display: block; width: 210px; text-align: left; background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; }
+button.node { cursor: pointer; }
+button.node:hover { border-color: var(--vscode-focusBorder); }
+.node.lead { width: 250px; border-color: var(--vscode-focusBorder); }
+.node.sel { border-color: var(--vscode-focusBorder); box-shadow: 0 0 0 2px color-mix(in srgb, var(--vscode-focusBorder) 45%, transparent); }
+.node.completed, .node.aborted { opacity: .85; }
+.node .h { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.node .h b { white-space: nowrap; }
+.id { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.time { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.models { margin: 4px 0 2px; }
+.task { color: var(--vscode-foreground); opacity: .85; margin: 3px 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.steps { font-family: var(--vscode-editor-font-family); font-size: 11.5px; color: var(--muted); }
+.step { display: flex; gap: 6px; white-space: nowrap; overflow: hidden; }
+.step::before { content: "⎿"; opacity: .7; }
+.step .tool, .call .tool { color: var(--vscode-foreground); }
+.step .args, .call .args { overflow: hidden; text-overflow: ellipsis; }
+.step.now { color: var(--vscode-progressBar-background, #4fc1ff); overflow: hidden; text-overflow: ellipsis; display: block; }
+.step.now::before { margin-right: 6px; }
+.step.end::before { content: none; }
+.step.end span + span::before { content: "· "; }
+.more { padding-left: 14px; }
+
+/* provider colours (VS Code chart palette) */
+.pill { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; padding: 0 7px; border-radius: 9px; font-size: 11px; --c: var(--vscode-charts-blue); color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent); border: 1px solid color-mix(in srgb, var(--c) 40%, transparent); }
+.c-blue { --c: var(--vscode-charts-blue, #4fc1ff); } .c-green { --c: var(--vscode-charts-green, #73c991); } .c-orange { --c: var(--vscode-charts-orange, #f0b27a); }
+.c-purple { --c: var(--vscode-charts-purple, #d6a3f0); } .c-yellow { --c: var(--vscode-charts-yellow, #e2c08d); } .c-red { --c: var(--vscode-charts-red, #f48771); }
+
+/* the conversation pane */
+.ph { display: flex; align-items: center; gap: 7px; padding: 7px 10px; border-bottom: 1px solid var(--line); min-width: 0; }
+.pbody { flex: 1; overflow: auto; padding: 8px 12px; min-height: 0; }
+.perr { color: var(--vscode-errorForeground); padding: 0 12px; }
+.perr:empty { display: none; }
+.pin { display: flex; gap: 6px; align-items: flex-end; margin: 8px; padding: 6px 8px; border: 1px solid var(--vscode-input-border, var(--line)); border-radius: 6px; background: var(--vscode-input-background); }
+.pin[hidden] { display: none; }
+.pin:focus-within { border-color: var(--vscode-focusBorder); }
+.pin textarea { flex: 1; resize: none; border: 0; outline: 0; background: none; color: var(--vscode-input-foreground); font: inherit; max-height: 120px; field-sizing: content; }
+.brief { border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; margin: 4px 0 8px; background: var(--card); }
+.brief .label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.brief .text { white-space: pre-wrap; max-height: 220px; overflow: auto; }
+.you { margin: 8px 0 8px 18%; padding: 5px 9px; border-radius: 8px; background: var(--vscode-button-secondaryBackground, var(--card)); white-space: pre-wrap; }
+.you.pending { opacity: .7; }
+.md { margin: 6px 0; overflow-wrap: anywhere; }
+.md p { margin: 4px 0; }
+.md pre { overflow: auto; padding: 6px; background: var(--vscode-textCodeBlock-background); border-radius: 4px; }
+.call { display: flex; gap: 6px; font-family: var(--vscode-editor-font-family); font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; margin: 2px 0; }
+.call::before { content: "⎿"; opacity: .7; }
+details.out { margin: 2px 0 2px 14px; font-size: 11.5px; color: var(--muted); }
+details.out summary { cursor: pointer; display: flex; align-items: center; gap: 5px; }
+details.out pre { max-height: 240px; overflow: auto; white-space: pre-wrap; margin: 4px 0; padding: 6px; background: var(--vscode-textCodeBlock-background); border-radius: 4px; }
+details.out.err summary { color: var(--vscode-errorForeground); }

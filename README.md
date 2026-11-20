@@ -248,9 +248,17 @@ A file the agent edits stays under review until you settle every change in it:
 omp can hand parts of a job to **subagents** (its `task` tool): helpers with their own context, such as `scout` (fast read-only exploration), `reviewer`, `security-reviewer`, or agents you define in `.omp/agents/*.md` (project) or `~/.omp/agent/agents/*.md` (yours). They often run in the background while the main agent keeps going.
 
 - Each one gets a **card** under the *Delegated to* row: its type, name, the job, what it is doing right now, time and tool count. The left edge is yellow while it runs, green when done, red if it failed.
-- 👁 **View** opens its own conversation (brief, tool calls, outputs, answer); refresh to follow it while it runs.
+- The map button on a card opens it in the **subagent map** (below), with its conversation open.
 - 💬 **Steer** sends it an extra instruction; ■ **Stop** cancels just that subagent.
-- While any run, a **Subagents** bar sits above the input (click a row to jump to its card) and the status bar reads *OMP: working · N subagents*.
+- While any run, a **Subagents** bar sits above the input (click a row to jump to its card, **Open map** for the map) and the status bar reads *OMP: working · N subagents*.
+
+#### Subagent map
+
+**Open map** (or **OMP Chat: Subagent map** in the Command Palette) opens a tab that fills the editor: the run as a tree. The lead sits on top with its model, your request and the time since you sent it; each subagent hangs under the agent that spawned it, nested ones included, with the model it runs on (one colour per provider), a live timer, its task and its last 3 steps (**+N more steps**). Finished ones fold to *Done · N steps*. Each chat has its own map, and it never opens by itself.
+
+Click an agent to open **its conversation** beside the tree (below it when the tab is narrow; drag the edge to resize): the task, what it says and every tool call, following it live. Type in the box at the bottom to steer it while it runs; ■ stops it.
+
+The lead decides by itself when to split work into subagents, and which of **your models** (★) suits each task, in every chat, not only after **Split across subagents**.
 
 ### Terminal
 

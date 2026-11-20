@@ -234,7 +234,8 @@ details > summary::-webkit-details-marker { display: none; }
   margin-bottom: 6px; border-radius: 6px; font-size: .92em; padding: 2px 0 4px;
   border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); background: var(--vscode-editorWidget-background);
 }
-#agents .ahead { padding: 2px 8px; font-weight: 600; }
+#agents .ahead { display: flex; align-items: center; gap: 6px; padding: 2px 4px 2px 8px; font-weight: 600; }
+#agents .ahead button.icon { gap: 4px; font-weight: normal; font-size: .9em; width: auto; }
 #agents .arow { display: flex; align-items: center; gap: 6px; width: 100%; padding: 2px 8px; text-align: left; }
 #agents .arow:hover { background: var(--vscode-list-hoverBackground); }
 #agents .arow.running > .codicon { color: var(--vscode-editorWarning-foreground, #cca700); }
@@ -242,32 +243,11 @@ details > summary::-webkit-details-marker { display: none; }
 #agents .arow.failed > .codicon { color: var(--vscode-errorForeground); }
 #agents .anow { flex: 1; min-width: 0; color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* subagent transcript sheet */
-#sheet.transcript { max-height: 80%; display: flex; flex-direction: column; }
-.tstatus { display: flex; align-items: center; gap: 8px; margin: 4px 0 6px; }
-.tstatus .unote { margin: 0; }
 .tpill { display: inline-flex; align-items: center; gap: 5px; padding: 1px 8px 1px 6px; border-radius: 10px; font-size: .85em; text-transform: capitalize;
   border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); }
 .tpill.completed { color: var(--vscode-testing-iconPassed, #3a3); border-color: currentColor; }
 .tpill.failed { color: var(--vscode-errorForeground); border-color: currentColor; }
 .tpill.running { color: var(--vscode-editorWarning-foreground, #cca700); border-color: currentColor; }
-.tscroll { overflow-y: auto; min-height: 60px; padding-right: 2px; }
-/* the task, then a timeline of what it said, the tools it called and their output */
-.tbrief { margin: 2px 0 8px; border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); border-radius: 8px; background: var(--vscode-editor-background, transparent); }
-.tbrief > summary { display: flex; align-items: center; gap: 6px; padding: 5px 10px; font-weight: 600; }
-.tbrief .out { margin: 0; padding: 6px 10px 8px; max-height: 160px; overflow: auto; white-space: pre-wrap; font-size: .88em; border-top: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); }
-.tl { position: relative; padding: 3px 0 3px 18px; }
-.tl::before { content: ''; position: absolute; left: 5px; top: 0; bottom: 0; border-left: 1px solid var(--vscode-widget-border, var(--vscode-panel-border)); }
-.tl::after { content: ''; position: absolute; left: 2px; top: 10px; width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-descriptionForeground); }
-.tl.say::after { background: var(--vscode-textLink-foreground); }
-.tl.err::after { background: var(--vscode-errorForeground); }
-.tl.call { display: flex; align-items: center; gap: 6px; color: var(--vscode-descriptionForeground); font-size: .9em; }
-.tl.call .targ { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--vscode-editor-font-family); }
-.tl.say .md { line-height: 1.5; }
-.tmsg > summary { display: flex; align-items: center; gap: 6px; color: var(--vscode-descriptionForeground); font-size: .88em; }
-.tmsg.err > summary { color: var(--vscode-errorForeground); }
-.tmsg .tlen { margin-left: auto; font-size: .9em; opacity: .8; }
-.tmsg .out { max-height: 200px; overflow: auto; white-space: pre-wrap; font-family: var(--vscode-editor-font-family); font-size: .85em; background: var(--vscode-textCodeBlock-background); padding: 6px; border-radius: 4px; margin: 4px 0 0; }
 
 /* files changed (Copilot-style summary with diff + undo) */
 .changes {

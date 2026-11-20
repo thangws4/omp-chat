@@ -9,6 +9,7 @@ const { OmpClient } = require('./omp-client');
 const keys = require('./keys');
 const plugins = require('./plugins');
 const review = require('./review');
+const { SubagentMap } = require('./subagent-map');
 const l10n = require('./media/l10n');
 const { PROVIDERS } = keys;
 
@@ -498,38 +499,36 @@ class ChatProvider {
     return { lead: this.lead, agents: [...this.subagents.values()].map(pick), now: Date.now() };
   }
 
-  // The subagent's own conversation (works after it finished too), simplified for the transcript sheet.
-  async subagentTranscript(id) {
+  // The subagent's own conversation (works after it finished too), simplified for the map's chat pane.
+  // The first user message is its task; later ones are what you sent it.
+  async transcriptData(id) {
     const s = this.subagents.get(id);
-    if (!s || !this.client) return;
-    try {
-      // From omp while it still tracks the subagent; after a respawn omp refuses, so read its session file
-      // (JSONL, one entry per line, same format as the main conversation) directly.
-      const r = await this.client.request({ type: 'get_subagent_messages', subagentId: id }).catch((e) => {
-        if (!s.sessionFile || !fs.existsSync(s.sessionFile)) throw e;
-        const messages = fs.readFileSync(s.sessionFile, 'utf8').split('\n')
-          .map((l) => { try { return JSON.parse(l); } catch { return null; } })
-          .filter((x) => x?.type === 'message' && x.message).map((x) => x.message);
-        return { messages };
-      });
-      const messages = [];
-      for (const m of r.messages || []) {
-        if (m.role === 'user') messages.push({ role: 'task', text: textOf(m.content).slice(0, 6000) });
-        else if (m.role === 'assistant') {
-          const tools = (m.content || []).filter((c) => c.type === 'toolCall')
-            .map((c) => ({ name: c.name, detail: String(c.arguments?.i || c.arguments?.path || c.arguments?.command || c.arguments?.pattern || '').slice(0, 120) }));
-          messages.push({ role: 'assistant', text: textOf(m.content), tools });
-        } else if (m.role === 'toolResult') {
-          messages.push({ role: 'tool', name: m.toolName, text: textOf(m.content).slice(0, 3000), isError: !!m.isError });
-        }
+    if (!s || !this.client) throw new Error('it is no longer tracked');
+    // From omp while it still tracks the subagent; after a respawn omp refuses, so read its session file
+    // (JSONL, one entry per line, same format as the main conversation) directly.
+    const r = await this.client.request({ type: 'get_subagent_messages', subagentId: id }).catch((e) => {
+      if (!s.sessionFile || !fs.existsSync(s.sessionFile)) throw e;
+      const messages = fs.readFileSync(s.sessionFile, 'utf8').split('\n')
+        .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+        .filter((x) => x?.type === 'message' && x.message).map((x) => x.message);
+      return { messages };
+    });
+    const messages = [];
+    for (const m of r.messages || []) {
+      if (m.role === 'user') messages.push({ role: messages.some((x) => x.role === 'task') ? 'you' : 'task', text: textOf(m.content).slice(0, 6000) });
+      else if (m.role === 'assistant') {
+        const tools = (m.content || []).filter((c) => c.type === 'toolCall')
+          .map((c) => ({ name: c.name, detail: String(c.arguments?.i || c.arguments?.path || c.arguments?.command || c.arguments?.pattern || '').slice(0, 120) }));
+        messages.push({ role: 'assistant', text: textOf(m.content), tools });
+      } else if (m.role === 'toolResult') {
+        messages.push({ role: 'tool', name: m.toolName, text: textOf(m.content).slice(0, 3000), isError: !!m.isError });
       }
-      this.post({ type: 'subagentTranscript', id, agent: s.agent, task: s.task, status: s.status, messages });
-    } catch (e) {
-      this.post({ type: 'error', text: `Could not read ${id}'s conversation: ${e.message}` });
     }
+    return { id, agent: s.agent, status: s.status, messages };
   }
 
-  async subagentControl(kind, id, text) {
+  // onError: where a failure is shown (the map passes its own); the chat otherwise.
+  async subagentControl(kind, id, text, onError) {
     if (!this.client) return;
     try {
       if (kind === 'stop') await this.client.request({ type: 'cancel_subagent', subagentId: id });
@@ -538,8 +537,15 @@ class ChatProvider {
         this.post({ type: 'notice', text: `Sent to ${id}: ${text.trim()}` });
       }
     } catch (e) {
-      this.post({ type: 'error', text: `${kind === 'stop' ? 'Could not stop' : 'Could not message'} ${id}: ${e.message}` });
+      const msg = `${kind === 'stop' ? 'Could not stop' : 'Could not message'} ${id}: ${e.message}`;
+      if (onError) onError(msg); else this.post({ type: 'error', text: msg });
     }
+  }
+
+  // The Subagents tab of this chat (one per chat), on the agent `id` when given. Never opens by itself.
+  openMap(id) {
+    this.map ??= new SubagentMap(this);
+    this.map.open(id);
   }
 
   refreshStatus() {
@@ -743,7 +749,7 @@ class ChatProvider {
       case 'executePlan': return this.executePlan(m.mode, !!m.delegate);
       case 'plugins': return this.showPlugins(m.refresh);
       case 'runInTerminal': return this.runInTerminal(m.command);
-      case 'subagentView': return this.subagentTranscript(m.id);
+      case 'openMap': return this.openMap(m.id);
       case 'subagentStop': return this.subagentControl('stop', m.id);
       case 'subagentSteer': return this.subagentControl('steer', m.id, m.text);
       case 'toggleFavorite': await this.toggleFavorite(m.id); return m.from === 'sheet' ? this.showModelsSheet() : undefined;
@@ -2333,6 +2339,7 @@ class ChatProvider {
   }
 
   dispose() {
+    this.map?.dispose();
     if (this.client) this.client.dispose();
   }
 
@@ -2438,6 +2445,7 @@ function openTab(context, { panel, resume, worktree } = {}) {
   chats.add(chat);
   panel.onDidDispose(() => {
     chats.delete(chat);
+    chat.map?.dispose();
     const c = chat.client;
     chat.client = null; // closed on purpose: no "omp stopped" error
     c?.dispose();
@@ -2540,6 +2548,7 @@ function activate(context) {
     vscode.commands.registerCommand('ompChat.manageModels', () => current().showModelsSheet()),
     vscode.commands.registerCommand('ompChat.setApiKey', () => current().manageKeys()),
     vscode.commands.registerCommand('ompChat.login', () => current().login()),
+    vscode.commands.registerCommand('ompChat.subagentMap', () => current().openMap()),
     vscode.commands.registerCommand('ompChat.exportChat', () => current().exportChat()),
     vscode.commands.registerCommand('ompChat.commands', () => current().showCommands()),
     vscode.commands.registerCommand('ompChat.mcp', () => current().showMcp()),
