@@ -4,3 +4,5 @@ icon.svg
 test/**
 .gitignore
 *.pdf
+docs/**
+.superpowers/**
