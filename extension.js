@@ -112,6 +112,7 @@ const DELEGATE_PLAN = 'Carry out the plan above by delegating it. Give each numb
   + 'When they are done, review their changes together, fix conflicts or gaps yourself, run the relevant checks or tests, '
   + 'and finish with a short summary per task.';
 const USAGE_DAY = 'ompChat.usageDay';       // globalState: model requests sent from this extension today (UTC)
+const USAGE_URL_HINT = "Gateway's usage endpoint, {key} = the key; e.g. https://claude.zyloris.com/api/check-usage/{key}";
 const utcDay = () => new Date().toISOString().slice(0, 10); // OpenRouter's free-model quota resets at 00:00 UTC
 
 // Undo what send() prepends ("[Note: …]" lines, selection / current-file context) for display.
@@ -570,19 +571,20 @@ class ChatProvider {
         { name: 'key', label: 'API key', type: 'password', placeholder: 'Paste the key', required: true },
         { name: 'label', label: 'Name (optional)', placeholder: 'e.g. work, personal' },
         { name: 'baseUrl', label: 'Base URL (optional)', placeholder: "Proxy or compatible endpoint; empty = the provider's own" },
+        { name: 'usageUrl', label: 'Usage URL (optional)', placeholder: USAGE_URL_HINT },
       ],
       submit: 'Save key', cancel: intro ? 'Skip' : 'Cancel',
     });
     if (!v?.key?.trim()) return false;
-    const baseUrl = keys.normalizeBaseUrl(v.baseUrl);
-    if (baseUrl === null) {
-      this.post({ type: 'error', text: `"${v.baseUrl}" is not an http(s) URL; the key was not saved.` });
+    const baseUrl = keys.normalizeBaseUrl(v.baseUrl), usageUrl = keys.normalizeBaseUrl(v.usageUrl);
+    if (baseUrl === null || usageUrl === null) {
+      this.post({ type: 'error', text: `"${baseUrl === null ? v.baseUrl : v.usageUrl}" is not an http(s) URL; the key was not saved.` });
       return false;
     }
     const p = PROVIDERS.find((x) => x.label === v.provider) || PROVIDERS[0];
     const count = (await keys.loadKeys(this.context, p.env)).length;
     const label = v.label?.trim() || (count ? `${p.label} ${count + 1}` : p.label);
-    await keys.addKey(this.context, p.env, label, v.key.trim(), baseUrl, p.prefix.slice(0, -1));
+    await keys.addKey(this.context, p.env, label, v.key.trim(), baseUrl, p.prefix.slice(0, -1), usageUrl);
     // Move to this provider when the current model has no key to run with.
     const cfg = vscode.workspace.getConfiguration('ompChat');
     const cur = keys.providerOf(cfg.get('model'));
@@ -602,7 +604,7 @@ class ChatProvider {
       const active = keys.activeKey(this.context, env, list);
       const ps = PROVIDERS.filter((p) => p.env === env);
       return { env, label: keys.groupLabel(env), providers: ps.map((p) => p.label), about: ps.map((p) => `${p.label}: ${p.description}`).join('\n'),
-        keys: list.map((k) => ({ id: k.id, label: k.label, mask: keys.mask(k.key), baseUrl: k.baseUrl || '', active: k.id === active?.id })) };
+        keys: list.map((k) => ({ id: k.id, label: k.label, mask: keys.mask(k.key), baseUrl: k.baseUrl || '', usageUrl: k.usageUrl || '', active: k.id === active?.id })) };
     }));
   }
 
@@ -631,19 +633,23 @@ class ChatProvider {
         ...(providers.length > 1 ? [{ name: 'provider', label: 'Provider', type: 'select', value: current.label,
           options: providers.map((p) => ({ value: p.label, label: p.label })) }] : []),
         { name: 'baseUrl', label: 'Base URL (optional)', value: k.baseUrl || '', placeholder: "Proxy or compatible endpoint; empty = the provider's own" },
+        { name: 'usageUrl', label: 'Usage URL (optional)', value: k.usageUrl || '', placeholder: USAGE_URL_HINT },
       ],
       submit: 'Save', cancel: 'Cancel',
     });
     if (!v) return;
-    const baseUrl = keys.normalizeBaseUrl(v.baseUrl);
-    if (baseUrl === null) return this.post({ type: 'error', text: `"${v.baseUrl}" is not an http(s) URL; the base URL was not changed.` });
+    const baseUrl = keys.normalizeBaseUrl(v.baseUrl), usageUrl = keys.normalizeBaseUrl(v.usageUrl);
+    if (baseUrl === null || usageUrl === null) {
+      return this.post({ type: 'error', text: `"${baseUrl === null ? v.baseUrl : v.usageUrl}" is not an http(s) URL; the base URL was not changed.` });
+    }
     const p = providers.find((x) => x.label === v.provider) || current;
     await keys.updateKeys(this.context, env, (l) => l.map((x) => {
       if (x.id !== id) return x;
-      const { baseUrl: _, provider: __, ...rest } = x;
-      return baseUrl ? { ...rest, baseUrl, provider: p.prefix.slice(0, -1) } : rest;
+      const { baseUrl: _, provider: __, usageUrl: ___, ...rest } = x;
+      return { ...rest, ...(baseUrl && { baseUrl, provider: p.prefix.slice(0, -1) }), ...(usageUrl && { usageUrl }) };
     }));
-    if (keys.activeKey(this.context, env, list)?.id === id) await this.restart(); // omp is using it
+    // omp only sees the base URL: a usage URL change needs no restart
+    if (keys.activeKey(this.context, env, list)?.id === id && (baseUrl || '') !== (k.baseUrl || '')) await this.restart();
     this.showKeys();
   }
 
@@ -1676,7 +1682,7 @@ class ChatProvider {
     // Cache for a minute: the meter refreshes after every turn.
     const cacheKey = `${provider}:${k?.id}`;
     if (!force && this.accountCache?.key === cacheKey && Date.now() - this.accountCache.at < 60000) return this.accountCache.data;
-    const data = (await keys.fetchAccount(provider, key, this.installId())) || (key ? { provider, noApi: true } : { provider, needKey: true });
+    const data = (await keys.fetchAccount(provider, key, this.installId(), k?.usageUrl)) || (key ? { provider, noApi: true } : { provider, needKey: true });
     this.accountCache = { key: cacheKey, at: Date.now(), data };
     return data;
   }
@@ -1710,7 +1716,7 @@ class ChatProvider {
       const active = keys.activeKey(this.context, p.env, list);
       keyRows = await Promise.all(list.slice(0, 8).map(async (k) => ({
         id: k.id, env: p.env, label: k.label, mask: keys.mask(k.key), active: k.id === active?.id,
-        account: k.id === active?.id ? account : await keys.fetchAccount(p.prefix.slice(0, -1), k.key, this.installId()),
+        account: k.id === active?.id ? account : await keys.fetchAccount(p.prefix.slice(0, -1), k.key, this.installId(), k.usageUrl),
       })));
     }
     this.view?.show?.(true);

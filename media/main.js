@@ -1288,6 +1288,12 @@
           u.title = k.baseUrl;
           text.appendChild(u);
         }
+        if (k.usageUrl) {
+          const u = el('div', 'kurl');
+          u.append(icon('graph'), el('span', '', k.usageUrl));
+          u.title = 'Usage URL: ' + k.usageUrl;
+          text.appendChild(u);
+        }
         r.append(icon(k.active ? 'pass-filled' : 'circle-large-outline', 'kradio'), text);
         if (!k.active) { // the whole row switches to this key
           r.classList.add('pick');
@@ -1413,6 +1419,10 @@
     if (a.error) return 'error: ' + a.error;
     if (a.needKey || a.noApi) return '';
     if (a.windows?.rolling) return `5h ${a.windows.rolling.status === 'rate-limited' ? 'full' : a.windows.rolling.percent + '%'} · week ${a.windows.weekly?.percent ?? '?'}%`;
+    if (a.custom) { // a gateway's usage URL: its most telling row
+      const r = a.custom.find(([k]) => /remain|left|balance|percent|used|quota/i.test(k));
+      return r ? `${r[0].split('.').pop()}: ${r[1]}` : '';
+    }
     if (a.free_model_daily_requests) return `free ${a.free_model_daily_requests.used}/${a.free_model_daily_requests.limit} today`;
     if (a.balance_infos) return a.balance_infos.map((b) => `${b.total_balance} ${b.currency}`).join(' · ');
     return '';
@@ -1491,8 +1501,15 @@
 
     if (a?.provider) {
       const names = { openrouter: 'OpenRouter account', deepseek: 'DeepSeek account', 'opencode-go': 'OpenCode Go plan', 'opencode-zen': 'OpenCode Zen' };
-      const acc = section(panel, names[a.provider] || a.provider);
-      if (a.windows) {
+      const acc = section(panel, a.custom ? 'Gateway usage' : names[a.provider] || a.provider);
+      if (a.custom) { // the key's usage URL answered: its JSON as rows, percentages as bars
+        for (const [k, v] of a.custom) {
+          const n = Number(v);
+          if (/percent|pct/i.test(k) && v !== '' && n >= 0 && n <= 100) line(acc, k, bar(n / 100), `${n}%`);
+          else line(acc, k, v);
+        }
+        if (!a.custom.length) note(acc, 'The usage URL returned nothing.');
+      } else if (a.windows) {
         for (const [k, label] of WINDOWS) windowLine(acc, label, a.windows[k]);
       } else if (a.noApi) {
         note(acc, 'This provider has no usage API; limits show up as errors when reached.');

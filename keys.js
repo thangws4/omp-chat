@@ -68,9 +68,10 @@ async function setActive(context, env, id) {
 }
 
 // baseUrl (optional) sends this key's requests to a proxy / compatible endpoint of `provider` (omp's provider id).
-async function addKey(context, env, label, key, baseUrl, provider) {
+// usageUrl (optional) is that gateway's own usage endpoint, `{key}` standing for the key.
+async function addKey(context, env, label, key, baseUrl, provider, usageUrl) {
   const list = await loadKeys(context, env);
-  const k = { id: newId(), label, key, ...(baseUrl && { baseUrl, provider }) };
+  const k = { id: newId(), label, key, ...(baseUrl && { baseUrl, provider }), ...(usageUrl && { usageUrl }) };
   list.push(k);
   await saveKeys(context, env, list);
   await setActive(context, env, k.id);
@@ -124,8 +125,16 @@ function normalizeBaseUrl(v) {
 const isQuotaError = (status, message) =>
   status === 429 || status === 402 || /rate.?limit|quota|usage limit|exceed|insufficient|credits?\b|too many requests/i.test(message || '');
 
-// Account balance / limits straight from the provider. Returns null when the provider has no such API.
-async function fetchAccount(provider, key, sessionId) {
+// Any JSON as [name, value] rows (["quota.used", "12"]), for a usage endpoint whose shape is not known.
+function flatten(o, pre = '', out = []) {
+  if (o && typeof o === 'object') for (const [k, v] of Object.entries(o)) flatten(v, pre ? `${pre}.${k}` : k, out);
+  else out.push([pre || 'value', String(o)]);
+  return out;
+}
+
+// Account balance / limits straight from the provider, or from the key's own usage URL (a gateway's).
+// Returns null when there is no such API.
+async function fetchAccount(provider, key, sessionId, usageUrl) {
   if (!key) return null;
   const get = async (url, headers) => {
     const r = await fetch(url, { headers: { Authorization: `Bearer ${key}`, ...headers }, signal: AbortSignal.timeout(8000) });
@@ -133,6 +142,8 @@ async function fetchAccount(provider, key, sessionId) {
     return r.json();
   };
   try {
+    // ponytail: shown as raw name/value rows; parse a gateway's fields when one deserves a gauge.
+    if (usageUrl) return { provider, custom: flatten(await get(usageUrl.replaceAll('{key}', encodeURIComponent(key)), { 'x-api-key': key })).slice(0, 20) };
     if (provider === 'openrouter') return { provider, ...(await get('https://openrouter.ai/api/v1/key')).data };
     if (provider === 'deepseek') return { provider, ...(await get('https://api.deepseek.com/user/balance')) };
     if (provider === 'opencode-go') {
@@ -149,5 +160,5 @@ async function fetchAccount(provider, key, sessionId) {
 
 module.exports = {
   PROVIDERS, ENVS, providerOf, groupLabel, mask,
-  loadKeys, activeKey, setActive, addKey, updateKeys, nextKey, envFor, baseUrlsFor, normalizeBaseUrl, isQuotaError, fetchAccount,
+  loadKeys, activeKey, setActive, addKey, updateKeys, nextKey, envFor, baseUrlsFor, normalizeBaseUrl, isQuotaError, fetchAccount, flatten,
 };

@@ -42,5 +42,16 @@ const ctx = { secrets: { get: async (k) => sec.get(k), store: async (k, v) => se
   assert.deepStrictEqual(await keys.baseUrlsFor(ctx), {});
   await keys.setActive(ctx, 'ANTHROPIC_API_KEY', px.id);
   assert.deepStrictEqual(await keys.baseUrlsFor(ctx), { anthropic: 'https://proxy.local' });
-  
+  // a gateway's usage URL: {key} filled in, any JSON shown as name/value rows
+  const gw = await keys.addKey(ctx, 'ANTHROPIC_API_KEY', 'gw', 'sk-z/1', 'https://gw.local/v1', 'anthropic', 'https://gw.local/api/check-usage/{key}');
+  assert.strictEqual(gw.usageUrl, 'https://gw.local/api/check-usage/{key}');
+  let seen;
+  global.fetch = async (url, o) => { seen = { url, h: o.headers }; return { ok: true, json: async () => ({ ok: true, quota: { used: 3, limit: 10 }, tags: ['a'] }) }; };
+  const acc = await keys.fetchAccount('anthropic', 'sk-z/1', 's', gw.usageUrl);
+  assert.strictEqual(seen.url, 'https://gw.local/api/check-usage/sk-z%2F1');
+  assert.strictEqual(seen.h['x-api-key'], 'sk-z/1');
+  assert.deepStrictEqual(acc.custom, [['ok', 'true'], ['quota.used', '3'], ['quota.limit', '10'], ['tags.0', 'a']]);
+  global.fetch = async () => ({ ok: false, status: 401, statusText: 'Unauthorized' });
+  assert.deepStrictEqual(await keys.fetchAccount('anthropic', 'k', 's', gw.usageUrl), { provider: 'anthropic', error: '401 Unauthorized' });
+  assert.strictEqual(await keys.fetchAccount('anthropic', 'k', 's'), null, 'no usage URL: no API');
 })().catch((e) => { console.error(e); process.exit(1); });
