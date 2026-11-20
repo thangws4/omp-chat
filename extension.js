@@ -369,6 +369,9 @@ class ChatProvider {
     this.shellSeq = 0;           // "!command" blocks
     this.queued = new Map();     // qid -> { message, text, context, images } waiting in omp's queue
     this.subagents = new Map();  // subagent id -> latest merged lifecycle/progress record
+    this.taskCalls = new Map();  // `task` tool call id made inside a subagent -> that subagent's id (nesting)
+    this.lead = null;            // { task, model, startedAt, endedAt } of your latest message, for the subagent map
+    this.map = null;             // the Subagents tab (subagent-map.js), opened on demand
     this.subSeq = 0;
     this.qSeq = 0;
     this.pinned = [];            // files you attached to every message until removed (workspace-relative)
@@ -426,6 +429,7 @@ class ChatProvider {
   onStatusEvent(type) {
     if (type === 'busy') { this.working = true; this.unseenDone = false; }
     if (type === 'idle') {
+      if (this.lead && !this.lead.endedAt) { this.lead.endedAt = Date.now(); this.map?.update(); }
       if (this.working && !this.view?.visible) this.unseenDone = true;
       if (this.working && !windowFocused()) this.notify('done');
       this.working = false;
@@ -454,20 +458,44 @@ class ChatProvider {
     const LIFE = { started: 'running', completed: 'completed', failed: 'failed', aborted: 'aborted' };
     const prev = this.subagents.get(id);
     const fresh = !prev || (prev.status !== 'running' && (prog?.status === 'running' || p.status === 'started') && p.parentToolCallId !== prev.parent);
-    const s = fresh ? { id, key: `${id}#${++this.subSeq}` } : prev;
+    const s = fresh ? { id, key: `${id}#${++this.subSeq}`, startedAt: Date.now(), endedAt: null, steps: [] } : prev;
     // assignment = what the parent asked for; task = that wrapped in omp's generic preamble
     const task = p.description || prog?.description || p.assignment || prog?.assignment || p.task || prog?.task || '';
     Object.assign(s, {
       agent: p.agent || prog?.agent || s.agent, parent: p.parentToolCallId || s.parent, detached: p.detached ?? s.detached,
       sessionFile: p.sessionFile || s.sessionFile, task: summaryLine(task) || s.task || '', status: prog?.status || LIFE[p.status] || s.status || 'running',
     });
+    // Spawned by a task call of another subagent (seen in its events), else by the lead.
+    s.parentAgent = (s.parent && this.taskCalls.get(s.parent)) || null;
     if (prog) {
       Object.assign(s, { intent: prog.lastIntent || s.intent, model: prog.resolvedModel || s.model, tool: prog.currentTool, toolArgs: prog.currentToolArgs,
         tools: prog.toolCount, tokens: prog.tokens, ms: prog.durationMs, cost: prog.cost });
+      if (Array.isArray(prog.recentTools)) { // omp: newest first, at most 5
+        s.steps = prog.recentTools.slice(0, 5).reverse().map((t) => ({ tool: String(t.tool || ''), args: String(t.args || '').slice(0, 120) }));
+      }
     }
+    if (s.status !== 'running') s.endedAt ??= Date.now();
     this.subagents.set(id, s);
     this.post({ type: 'subagent', ...s });
     this.refreshStatus();
+    this.map?.update();
+    this.map?.agentActivity(id);
+  }
+
+  // A subagent's own session events (subscription level "events"). Only two things matter here: its `task` calls,
+  // so the agents they spawn sit under it on the map, and that it moved, so an open chat pane refreshes.
+  onSubagentEvent(p) {
+    const e = p?.event;
+    if (!p?.id || !e) return;
+    if (e.type === 'tool_execution_start' && e.toolName === 'task' && e.toolCallId) this.taskCalls.set(e.toolCallId, p.id);
+    this.map?.agentActivity(p.id);
+  }
+
+  // What the Subagents tab draws: the lead (your latest message) and every subagent of this run.
+  mapState() {
+    const pick = ({ id, key, agent, task, status, model, intent, tool, toolArgs, tools, steps, startedAt, endedAt, parentAgent }) =>
+      ({ id, key, agent, task, status, model, intent, tool, toolArgs, tools, steps, startedAt, endedAt, parentAgent });
+    return { lead: this.lead, agents: [...this.subagents.values()].map(pick), now: Date.now() };
   }
 
   // The subagent's own conversation (works after it finished too), simplified for the transcript sheet.
@@ -830,8 +858,10 @@ class ChatProvider {
       } catch {}
     }
     this.track(client);
-    // Live subagent lifecycle + progress frames (off by default in omp's RPC mode).
-    client.request({ type: 'set_subagent_subscription', level: 'progress' }).catch(() => {});
+    // Live subagent frames (off by default in omp's RPC mode). "events" adds each subagent's own events, which the map
+    // needs for nesting and live chat; an omp without it still gets lifecycle + progress.
+    client.request({ type: 'set_subagent_subscription', level: 'events' })
+      .catch(() => client.request({ type: 'set_subagent_subscription', level: 'progress' })).catch(() => {});
     return client;
   }
 
@@ -1223,6 +1253,9 @@ class ChatProvider {
         break;
       case 'subagent_progress':
         this.onSubagent(r.payload, r.payload?.progress);
+        break;
+      case 'subagent_event':
+        this.onSubagentEvent(r.payload);
         break;
       case 'queue_update':
         if (!this.replaying) this.onQueue(r);
@@ -2207,6 +2240,10 @@ class ChatProvider {
     }
     // Slash commands are not conversation messages in omp, so they get no turn number (no Rewind).
     this.post({ type: 'user', ...shown, turn: isCommand ? 0 : ++this.turnSeq });
+    if (!isCommand) {
+      this.lead = { task: summaryLine(text), model: String(vscode.workspace.getConfiguration('ompChat').get('model') || ''), startedAt: Date.now(), endedAt: null };
+      this.map?.update();
+    }
     if (picked.length) this.post({ type: 'notice', text: `Auto-picked skills: ${picked.map((s) => s.name).join(', ')}` });
     client.prompt(message, this.busy ? 'followUp' : undefined, isCommand ? undefined : images);
     this.busy = true;
@@ -2252,6 +2289,9 @@ class ChatProvider {
     this.turnSeq = 0;
     this.queued.clear();
     this.subagents.clear();
+    this.taskCalls.clear();
+    this.lead = null;
+    this.map?.update();
     this.post({ type: 'clear' });
     this.post({ type: 'todos', phases: [] });
     if (this.client) {
