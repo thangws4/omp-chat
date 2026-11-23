@@ -5,13 +5,15 @@ const fs = require('fs');
 const vscode = require('vscode');
 
 const files = new Map(); // fsPath -> { base: lines accepted so far, created, owner: chat to tell about rejections }
+const listeners = new Set(); // notified with pending review summary whenever files/hunks change
 let t = (s) => s, emitter, addDeco, delDeco, baseDocs, statusItem;
 const SCHEME = 'omp-review'; // the file as it was before omp's edits, for Compare
 
 const split = (s) => String(s).split(/\r?\n/);
 const key = (p) => vscode.Uri.file(typeof p === 'string' ? p : p.fsPath).fsPath; // same drive-letter case as VS Code
 
-// Line diff of a -> b as hunks { a0, a1, b0, b1 } (half-open line ranges).
+// Line diff of a -> b as hunks { a0, a1, b0, b1 } (half-open line ranges), using Myers O((N+M)D) diff
+// on the changed middle so large files with scattered edits still produce exact per-change hunks.
 function diffLines(a, b) {
   let s = 0;
   while (s < a.length && s < b.length && a[s] === b[s]) s++;
@@ -19,20 +21,51 @@ function diffLines(a, b) {
   while (ea > s && eb > s && a[ea - 1] === b[eb - 1]) { ea--; eb--; }
   const n = ea - s, m = eb - s;
   if (!n && !m) return [];
-  // ponytail: O(n·m) LCS on the changed middle only; past 4M cells it is one big hunk. Myers if that bites.
-  if (n * m > 4e6) return [{ a0: s, a1: ea, b0: s, b1: eb }];
-  const w = m + 1, L = new Uint32Array((n + 1) * w);
-  for (let i = n - 1; i >= 0; i--) {
-    for (let j = m - 1; j >= 0; j--) {
-      L[i * w + j] = a[s + i] === b[s + j] ? L[(i + 1) * w + j + 1] + 1 : Math.max(L[(i + 1) * w + j], L[i * w + j + 1]);
+  if (!n || !m) return [{ a0: s, a1: ea, b0: s, b1: eb }];
+  // Runs on every keystroke in a reviewed file: past 1000 edits (trace ≈ 4MB, work ≈ (n+m)·1000) one hunk will do.
+  const maxD = Math.min(n + m, 1000);
+  const offset = maxD;
+  const v = new Int32Array(2 * maxD + 1);
+  const trace = [];
+  let foundD = -1;
+  for (let d = 0; d <= maxD; d++) {
+    trace.push(v.slice(offset - d, offset + d + 1));
+    for (let k = -d; k <= d; k += 2) {
+      let x;
+      if (k === -d || (k !== d && v[offset + k - 1] < v[offset + k + 1])) x = v[offset + k + 1];
+      else x = v[offset + k - 1] + 1;
+      let y = x - k;
+      while (x < n && y < m && a[s + x] === b[s + y]) { x++; y++; }
+      v[offset + k] = x;
+      if (x >= n && y >= m) { foundD = d; break; }
     }
+    if (foundD >= 0) break;
   }
+  if (foundD < 0) return [{ a0: s, a1: ea, b0: s, b1: eb }];
+  // Backtrack edit script (pairs of x, y endpoints) and collapse consecutive edits into hunks.
+  const ops = []; // { del: bool, x, y } in reverse
+  let x = n, y = m;
+  for (let d = foundD; d > 0; d--) {
+    const prev = trace[d]; // v before step d, indexed by k + d
+    const k = x - y;
+    const prevK = (k === -d || (k !== d && prev[k - 1 + d] < prev[k + 1 + d])) ? k + 1 : k - 1;
+    const prevX = prev[prevK + d];
+    const prevY = prevX - prevK;
+    while (x > prevX && y > prevY) { x--; y--; }
+    if (x === prevX) { y--; ops.push({ del: false, x, y }); }
+    else { x--; ops.push({ del: true, x, y }); }
+  }
+  ops.reverse();
   const out = [];
-  let i = 0, j = 0, h = null;
-  while (i < n || j < m) {
-    if (i < n && j < m && a[s + i] === b[s + j]) { h = null; i++; j++; continue; }
-    if (!h) out.push(h = { a0: s + i, a1: s + i, b0: s + j, b1: s + j });
-    if (j < m && (i >= n || L[i * w + j + 1] >= L[(i + 1) * w + j])) { j++; h.b1++; } else { i++; h.a1++; }
+  for (const op of ops) {
+    const ax = s + op.x, by = s + op.y;
+    const last = out[out.length - 1];
+    if (last && ax <= last.a1 && by <= last.b1) {
+      if (op.del) last.a1 = Math.max(last.a1, ax + 1);
+      else last.b1 = Math.max(last.b1, by + 1);
+    } else {
+      out.push(op.del ? { a0: ax, a1: ax + 1, b0: by, b1: by } : { a0: ax, a1: ax, b0: by, b1: by + 1 });
+    }
   }
   return out;
 }
@@ -67,6 +100,37 @@ function track(file, oldText, created, owner) {
   refresh();
 }
 
+// Called when Undo or Rewind restores a file from outside the editor review UI.
+function clear(file) {
+  const k = key(file);
+  if (!files.delete(k)) return;
+  refresh();
+}
+
+function onChange(cb) {
+  listeners.add(cb);
+  return { dispose: () => listeners.delete(cb) };
+}
+
+// Pending files under review (for an owner chat, or all if omitted), for the in-panel Review Bar.
+function pendingSummary(owner) {
+  const out = [];
+  for (const [k, f] of files) {
+    if (owner && f.owner !== owner) continue;
+    const hs = hunksOfPath(k);
+    if (!hs.length) continue;
+    const plus = hs.reduce((s, h) => s + (h.b1 - h.b0), 0);
+    const minus = hs.reduce((s, h) => s + (h.a1 - h.a0), 0);
+    out.push({ path: k, rel: vscode.workspace.asRelativePath(k).replace(/\\/g, '/'), hunks: hs.length, plus, minus, created: !!f.created });
+  }
+  return out;
+}
+
+async function decideOwner(owner, accept) {
+  const targets = [...files.entries()].filter(([, f]) => !owner || f.owner === owner).map(([k]) => vscode.Uri.file(k));
+  for (const uri of targets) await decideAll(uri, accept);
+}
+
 // The hunk the cursor is in; a pure deletion sits on the line after it.
 const hunkAt = (hunks, line) => hunks.find((h) => line >= h.b0 && line < Math.max(h.b1, h.b0 + 1));
 
@@ -88,6 +152,7 @@ function hunksOfPath(k) {
 
 function refresh() {
   emitter?.fire();
+  for (const cb of listeners) { try { cb(); } catch {} }
   if (!addDeco) return;
   for (const ed of vscode.window.visibleTextEditors || []) paint(ed);
   for (const d of vscode.workspace.textDocuments || []) if (d.uri.scheme === SCHEME) baseDocs.fire(d.uri);
@@ -279,4 +344,4 @@ function register(context, translate) {
     vscode.window.onDidChangeTextEditorSelection(updateInChange));
 }
 
-module.exports = { register, track, diffLines, formatDiff, hunkAt, removedLabel, files, decide, decideAll };
+module.exports = { register, track, clear, onChange, pendingSummary, decideOwner, diffLines, formatDiff, hunkAt, removedLabel, files, decide, decideAll };

@@ -137,8 +137,39 @@
         "category": "OMP Chat"
       },
       {
+        "command": "ompChat.agents",
+        "title": "%command.agents%",
+        "category": "OMP Chat"
+      },
+      {
+        "command": "ompChat.memory",
+        "title": "%command.memory%",
+        "category": "OMP Chat"
+      },
+      {
+        "command": "ompChat.commandRules",
+        "title": "%command.commandRules%",
+        "category": "OMP Chat"
+      },
+      {
         "command": "ompChat.mcp",
         "title": "%command.mcp%",
+        "category": "OMP Chat"
+      },
+      {
+        "command": "ompChat.inlineEdit",
+        "title": "%command.inlineEdit%",
+        "category": "OMP Chat"
+      },
+      {
+        "command": "ompChat.generateCommit",
+        "title": "%command.generateCommit%",
+        "category": "OMP Chat",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "ompChat.clearAttachments",
+        "title": "%command.clearAttachments%",
         "category": "OMP Chat"
       },
       {
@@ -249,9 +280,24 @@
           "group": "2_chat@2"
         },
         {
-          "command": "ompChat.mcp",
+          "command": "ompChat.agents",
           "when": "view == ompChat.view",
           "group": "2_chat@3"
+        },
+        {
+          "command": "ompChat.memory",
+          "when": "view == ompChat.view",
+          "group": "2_chat@4"
+        },
+        {
+          "command": "ompChat.commandRules",
+          "when": "view == ompChat.view",
+          "group": "2_chat@5"
+        },
+        {
+          "command": "ompChat.mcp",
+          "when": "view == ompChat.view",
+          "group": "2_chat@6"
         },
         {
           "command": "ompChat.newTab",
@@ -275,13 +321,17 @@
           "group": "0_ompChat@1"
         },
         {
-          "command": "ompChat.explain",
-          "when": "editorHasSelection",
+          "command": "ompChat.inlineEdit",
           "group": "0_ompChat@2"
         },
         {
-          "command": "ompChat.fix",
+          "command": "ompChat.explain",
+          "when": "editorHasSelection",
           "group": "0_ompChat@3"
+        },
+        {
+          "command": "ompChat.fix",
+          "group": "0_ompChat@4"
         }
       ],
       "explorer/context": [
@@ -314,9 +364,26 @@
           "group": "navigation@3"
         },
         {
-          "command": "ompChat.chats",
+          "command": "ompChat.plugins",
           "when": "activeWebviewPanelId == 'ompChat.tab'",
           "group": "navigation@4"
+        },
+        {
+          "command": "ompChat.subagentMap",
+          "when": "activeWebviewPanelId == 'ompChat.tab'",
+          "group": "navigation@5"
+        },
+        {
+          "command": "ompChat.chats",
+          "when": "activeWebviewPanelId == 'ompChat.tab'",
+          "group": "navigation@6"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "ompChat.generateCommit",
+          "when": "scmProvider == git",
+          "group": "navigation@1"
         }
       ]
     },
@@ -381,6 +448,23 @@
           "default": [],
           "markdownDescription": "%config.allowedCommands%"
         },
+        "ompChat.deniedCommands": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "markdownDescription": "%config.deniedCommands%"
+        },
+        "ompChat.fallbackModel": {
+          "type": "string",
+          "default": "",
+          "description": "%config.fallbackModel%"
+        },
+        "ompChat.budgetAlert": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "%config.budgetAlert%"
+        },
         "ompChat.extraArgs": {
           "type": "array",
           "items": {
@@ -401,6 +485,12 @@
         "command": "ompChat.ask",
         "key": "ctrl+alt+a",
         "mac": "cmd+alt+a",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "ompChat.inlineEdit",
+        "key": "ctrl+alt+i",
+        "mac": "cmd+alt+i",
         "when": "editorTextFocus"
       },
       {

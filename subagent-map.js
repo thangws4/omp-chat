@@ -58,6 +58,12 @@ class SubagentMap {
         return;
       case 'steer': case 'stop':
         return this.chat.subagentControl(m.type, m.id, m.text, (text) => this.post({ type: 'error', id: m.id, text }));
+      case 'stopAll':
+        return this.chat.stopAllSubagents((text) => this.post({ type: 'error', id: this.selected, text }));
+      case 'focusChat':
+        return this.chat.reveal();
+      case 'openFile':
+        return this.chat.openFile(m.ref);
     }
   }
 
@@ -76,6 +82,7 @@ class SubagentMap {
 <script nonce="${nonce}" type="application/json" id="l10n">${JSON.stringify(this.chat.dictionary ?? null).replace(/</g, '\\u003c')}</script>
 <script nonce="${nonce}" src="${uri('l10n.js')}"></script>
 <script nonce="${nonce}" src="${uri('vendor/markdown-it.min.js')}"></script>
+<script nonce="${nonce}" src="${uri('highlight.js')}"></script>
 <script nonce="${nonce}" src="${uri('map.js')}"></script>
 </body></html>`;
   }

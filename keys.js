@@ -29,6 +29,15 @@ const PROVIDERS = [
     url: 'https://platform.moonshot.ai/console/api-keys', prefix: 'moonshot/', defaultModel: 'moonshot/kimi-k3' },
   { label: 'Z.ai', description: 'GLM models, cheap subscription or pay per token', env: 'ZAI_API_KEY',
     url: 'https://z.ai/manage-apikey/apikey-list', prefix: 'zai/', defaultModel: 'zai/glm-5.1' },
+  { label: 'Ollama (Local)', description: 'local models via Ollama (no API key needed)', env: 'OLLAMA_API_KEY',
+    url: 'https://ollama.com', prefix: 'ollama/', defaultModel: 'ollama/qwen2.5-coder:latest',
+    optionalKey: true, defaultBaseUrl: 'http://localhost:11434/v1' },
+  { label: 'LM Studio (Local)', description: 'local models via LM Studio (no API key needed)', env: 'LMSTUDIO_API_KEY',
+    url: 'https://lmstudio.ai', prefix: 'lmstudio/', defaultModel: 'lmstudio/local-model',
+    optionalKey: true, defaultBaseUrl: 'http://localhost:1234/v1' },
+  { label: 'Custom (OpenAI-compatible)', description: 'any OpenAI-compatible proxy or local server', env: 'CUSTOM_OPENAI_API_KEY',
+    url: '', prefix: 'custom/', defaultModel: 'custom/default',
+    optionalKey: true },
 ];
 
 const ENVS = [...new Set(PROVIDERS.map((p) => p.env))];
@@ -134,7 +143,7 @@ function flatten(o, pre = '', out = []) {
 
 // Account balance / limits straight from the provider, or from the key's own usage URL (a gateway's).
 // Returns null when there is no such API.
-async function fetchAccount(provider, key, sessionId, usageUrl) {
+async function fetchAccount(provider, key, sessionId, usageUrl, baseUrl) {
   if (!key) return null;
   const get = async (url, headers) => {
     const r = await fetch(url, { headers: { Authorization: `Bearer ${key}`, ...headers }, signal: AbortSignal.timeout(8000) });
@@ -155,6 +164,8 @@ async function fetchAccount(provider, key, sessionId, usageUrl) {
       const used = top(/used$/i), limit = top(/limit$/i);
       return { provider, custom: rows.slice(0, 40), ...(used != null && +limit > 0 && { gauge: { used: +used, limit: +limit } }) };
     }
+    // A proxy/gateway base URL without a usage URL cannot be queried against the official provider's account API.
+    if (baseUrl) return null;
     if (provider === 'openrouter') return { provider, ...(await get('https://openrouter.ai/api/v1/key')).data };
     if (provider === 'deepseek') return { provider, ...(await get('https://api.deepseek.com/user/balance')) };
     if (provider === 'opencode-go') {
@@ -169,7 +180,49 @@ async function fetchAccount(provider, key, sessionId, usageUrl) {
   return null;
 }
 
+// Quick connectivity / auth check for a saved or newly entered key (+ optional baseUrl / usageUrl).
+const PROBE_URLS = {
+  openrouter: 'https://openrouter.ai/api/v1/key',
+  deepseek: 'https://api.deepseek.com/user/balance',
+  anthropic: 'https://api.anthropic.com/v1/models',
+  openai: 'https://api.openai.com/v1/models',
+  google: 'https://generativelanguage.googleapis.com/v1beta/models',
+  xai: 'https://api.x.ai/v1/models',
+  mistral: 'https://api.mistral.ai/v1/models',
+  groq: 'https://api.groq.com/openai/v1/models',
+  moonshot: 'https://api.moonshot.ai/v1/models',
+  'opencode-go': 'https://opencode.ai/zen/go/v1/usage',
+  'opencode-zen': 'https://opencode.ai/zen/v1/models',
+  ollama: 'http://localhost:11434/v1/models',
+  lmstudio: 'http://localhost:1234/v1/models',
+};
+
+async function testKey(provider, key, baseUrl, usageUrl, sessionId) {
+  if (usageUrl) {
+    const r = await fetchAccount(provider, key, sessionId, usageUrl, baseUrl);
+    if (r?.error) return { ok: false, message: `Usage URL failed: ${r.error}` };
+    const extra = r?.gauge ? ` (${Math.round((r.gauge.used / r.gauge.limit) * 100)}% used)` : '';
+    return { ok: true, message: `Usage URL OK${extra}` };
+  }
+  const url = baseUrl ? `${baseUrl.replace(/\/+$/, '')}/models` : PROBE_URLS[provider];
+  if (!url) return { ok: true, message: 'No test endpoint for this provider; key saved format looks valid.' };
+  const headers = { Authorization: `Bearer ${key}`, 'x-api-key': key };
+  if (provider === 'anthropic') headers['anthropic-version'] = '2023-06-01';
+  if (provider === 'opencode-go') Object.assign(headers, { 'User-Agent': 'omp-chat-vscode', 'x-opencode-session': sessionId || 'omp-chat' });
+  const target = provider === 'google' && !baseUrl ? `${url}?key=${encodeURIComponent(key)}` : url;
+  try {
+    const r = await fetch(target, { headers, signal: AbortSignal.timeout(8000) });
+    if (!r.ok) {
+      const why = String(await r.text?.().catch(() => '') || '').replace(/\s+/g, ' ').trim().slice(0, 140);
+      return { ok: false, message: `${r.status} ${r.statusText}${why ? ' — ' + why : ''}` };
+    }
+    return { ok: true, message: `Connected (${r.status} OK)` };
+  } catch (e) {
+    return { ok: false, message: e.name === 'TimeoutError' ? 'Timed out after 8s' : e.message };
+  }
+}
+
 module.exports = {
   PROVIDERS, ENVS, providerOf, groupLabel, mask,
-  loadKeys, activeKey, setActive, addKey, updateKeys, nextKey, envFor, baseUrlsFor, normalizeBaseUrl, isQuotaError, fetchAccount, flatten,
+  loadKeys, activeKey, setActive, addKey, updateKeys, nextKey, envFor, baseUrlsFor, normalizeBaseUrl, isQuotaError, fetchAccount, testKey, flatten,
 };

@@ -2,7 +2,11 @@
 // you click, its conversation live with a box to steer it. Data comes from the chat (subagent-map.js).
 (function () {
   const vscode = acquireVsCodeApi();
-  const md = window.markdownit({ html: false, linkify: true });
+  const hl = window.ompHighlight;
+  const md = window.markdownit({
+    html: false, linkify: true,
+    highlight: (code, lang) => (hl ? `<pre class="hljs"><code>${hl.highlight(code, lang)}</code></pre>` : ''),
+  });
   const $ = (id) => document.getElementById(id);
   try { window.ompL10n?.watch(window.ompL10n.compile(JSON.parse($('l10n')?.textContent || 'null')), document.body); }
   catch (e) { console.error('l10n', e); }
@@ -21,6 +25,8 @@
     const s = Math.max(0, Math.round(ms / 1000));
     return s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m` : s >= 60 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${s}s`;
   };
+  const kTok = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(n >= 10000 ? 0 : 1)}k` : String(n || 0));
+  const money = (n) => (n > 0 ? `$${n < 0.01 ? n.toFixed(4) : n.toFixed(2)}` : '');
   // Same provider, same colour (the VS Code chart palette, so it follows the theme).
   const COLORS = ['blue', 'green', 'orange', 'purple', 'yellow', 'red'];
   const colorOf = (model) => {
@@ -39,7 +45,23 @@
   let skew = 0;            // extension clock - webview clock
   let selected = null;     // agent id whose conversation is open
   let transcript = null;   // its last transcript
+  let zoom = 1;            // tree zoom factor
   const pending = new Map(); // agent id -> instructions you sent that its conversation does not show yet
+
+  function setZoom(z) {
+    zoom = Math.max(0.5, Math.min(1.4, Math.round(z * 10) / 10));
+    const org = document.querySelector('#tree .org');
+    if (org) org.style.zoom = String(zoom);
+    const lbl = document.querySelector('#top .zlbl');
+    if (lbl) lbl.textContent = `${Math.round(zoom * 100)}%`;
+  }
+  function fitTree() {
+    const tree = $('tree'), org = tree.querySelector('.org');
+    if (!org) return;
+    org.style.zoom = '1';
+    const ratio = (tree.clientWidth - 36) / Math.max(org.scrollWidth, 1);
+    setZoom(Math.min(1, Math.max(0.5, ratio)));
+  }
 
   // A timer: counts from `start` until `end` (or now), ticked by the interval below.
   const timer = (start, end) => {
@@ -58,10 +80,35 @@
   function render() {
     const agents = state.agents;
     const running = agents.filter((a) => a.status === 'running').length;
+    const totalTokens = agents.reduce((s, a) => s + (a.tokens || 0), 0);
+    const totalCost = agents.reduce((s, a) => s + (a.cost || 0), 0);
     const top = $('top');
     top.textContent = '';
     top.append(icon('type-hierarchy-sub'), el('b', '', 'Subagents'),
-      el('span', 'muted', agents.length ? (running ? `${running} running` : 'all finished') : ''), el('span', 'spacer'));
+      el('span', 'muted', agents.length ? (running ? `${running} running` : 'all finished') : ''));
+    if (totalTokens || totalCost) {
+      const m = [totalTokens ? `${kTok(totalTokens)} tok` : '', money(totalCost)].filter(Boolean).join(' · ');
+      top.append(el('span', 'statpill', m));
+    }
+    top.append(el('span', 'spacer'));
+    if (running > 0) {
+      const stopAll = el('button', 'topbtn danger');
+      stopAll.title = 'Stop all running subagents';
+      stopAll.append(icon('debug-stop'), el('span', '', 'Stop all'));
+      stopAll.onclick = () => vscode.postMessage({ type: 'stopAll' });
+      top.append(stopAll);
+    }
+    if (agents.length) {
+      const zbar = el('span', 'zbar');
+      const zbtn = (ic, title, fn) => { const b = el('button', 'icon'); b.title = title; b.appendChild(icon(ic)); b.onclick = fn; return b; };
+      zbar.append(
+        zbtn('zoom-out', 'Zoom out', () => setZoom(zoom - 0.1)),
+        el('span', 'zlbl', `${Math.round(zoom * 100)}%`),
+        zbtn('zoom-in', 'Zoom in', () => setZoom(zoom + 0.1)),
+        zbtn('screen-normal', 'Fit to view', fitTree),
+      );
+      top.append(zbar);
+    }
     if (state.lead?.startedAt) top.append(timer(state.lead.startedAt, state.lead.endedAt));
 
     const ids = new Set(agents.map((a) => a.id));
@@ -84,6 +131,7 @@
     const scroll = [tree.scrollLeft, tree.scrollTop];
     tree.textContent = '';
     const org = el('div', 'org');
+    org.style.zoom = String(zoom);
     const root = el('ul');
     const li = el('li');
     li.appendChild(leadNode());
@@ -97,7 +145,9 @@
   }
 
   function leadNode() {
-    const n = el('div', 'node lead');
+    const n = el('button', 'node lead');
+    n.title = 'Open the main chat';
+    n.onclick = () => vscode.postMessage({ type: 'focusChat' });
     const h = el('div', 'h');
     h.append(icon('hubot'), el('b', '', 'Lead'), el('span', 'spacer'));
     if (state.lead?.startedAt) h.append(timer(state.lead.startedAt, state.lead.endedAt));
@@ -115,7 +165,12 @@
     const [ic, mod] = STATUS[a.status] || STATUS.running;
     h.append(icon(ic, mod), el('b', '', a.agent || 'agent'), el('span', 'id', a.id), el('span', 'spacer'), timer(a.startedAt, a.endedAt));
     n.appendChild(h);
-    if (a.model) n.appendChild(el('div', 'models')).appendChild(modelPill(a.model));
+    if (a.model || a.tokens || a.cost) {
+      const mr = n.appendChild(el('div', 'models'));
+      if (a.model) mr.appendChild(modelPill(a.model));
+      const meta = [a.tokens ? `${kTok(a.tokens)} tok` : '', money(a.cost)].filter(Boolean).join(' · ');
+      if (meta) mr.appendChild(el('span', 'mcost', meta));
+    }
     if (a.task) n.appendChild(el('div', 'task', a.task));
     const steps = el('div', 'steps');
     if (a.status === 'running') {
@@ -229,7 +284,12 @@
       } else if (m.role === 'you') {
         body.appendChild(el('div', 'you', m.text));
       } else if (m.role === 'assistant') {
-        if (m.text?.trim()) { const t = el('div', 'md'); t.innerHTML = md.render(m.text); body.appendChild(t); }
+        if (m.text?.trim()) {
+          const t = el('div', 'md');
+          t.innerHTML = md.render(m.text);
+          enhanceMd(t);
+          body.appendChild(t);
+        }
         for (const t of m.tools || []) {
           const r = el('div', 'call');
           r.append(el('span', 'tool', t.name), el('span', 'args', t.detail || ''));
@@ -249,13 +309,43 @@
     if (atEnd) body.scrollTop = body.scrollHeight;
   }
 
-  // ---- the pane's height when it sits below the tree (narrow tab) ----
+  const PATHISH = /^(?:[A-Za-z]:)?[\w.@~\/\\-]*\.[\w]{1,12}(?::\d+(?::\d+)?|#L\d+(?:-L?\d+)?)?$/;
+  function enhanceMd(e) {
+    for (const pre of e.querySelectorAll('pre')) {
+      const wrap = el('div', 'codewrap');
+      pre.before(wrap);
+      wrap.appendChild(pre);
+      const b = el('button', 'icon codecopy');
+      b.title = 'Copy';
+      b.appendChild(icon('copy'));
+      b.onclick = () => {
+        navigator.clipboard.writeText(pre.querySelector('code')?.textContent ?? pre.textContent);
+        b.firstChild.className = 'codicon codicon-check';
+        setTimeout(() => { b.firstChild.className = 'codicon codicon-copy'; }, 1200);
+      };
+      wrap.appendChild(b);
+    }
+    for (const c of e.querySelectorAll('code')) {
+      const s = c.textContent.trim();
+      if (c.closest('pre') || s.length > 260 || !PATHISH.test(s)) continue;
+      c.classList.add('flink');
+      c.title = 'Open file';
+      c.onclick = () => vscode.postMessage({ type: 'openFile', ref: s });
+    }
+  }
+
+  // ---- resize the pane: height when narrow (<900px), width when wide (>=900px) ----
   $('grip').onpointerdown = (e) => {
     const grip = e.currentTarget;
     grip.setPointerCapture(e.pointerId);
     grip.onpointermove = (m) => {
-      const h = Math.min(window.innerHeight - 140, Math.max(120, window.innerHeight - m.clientY));
-      $('app').style.setProperty('--pane-h', `${h}px`);
+      if (window.innerWidth >= 900) {
+        const w = Math.min(window.innerWidth - 280, Math.max(280, window.innerWidth - m.clientX));
+        $('app').style.setProperty('--pane-w', `${w}px`);
+      } else {
+        const h = Math.min(window.innerHeight - 140, Math.max(120, window.innerHeight - m.clientY));
+        $('app').style.setProperty('--pane-h', `${h}px`);
+      }
     };
     grip.onpointerup = () => { grip.onpointermove = null; };
   };

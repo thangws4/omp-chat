@@ -43,7 +43,7 @@ function findOmp() {
 // Left side of the diff view: the file as it was before an omp edit (omp-orig:/<name>?<editId>).
 const ORIG_SCHEME = 'omp-orig';
 // Settings that only take effect when omp is respawned (the model switches live via set_model).
-const RESTART_KEYS = ['approvalMode', 'ompPath', 'extraArgs', 'announceSteps'];
+const RESTART_KEYS = ['approvalMode', 'ompPath', 'extraArgs', 'announceSteps', 'deniedCommands'];
 
 // Appended to omp's system prompt (ompChat.announceSteps): say what you are about to do, as Claude Code does.
 const ANNOUNCE_STEPS = `# Keeping the user informed
@@ -116,9 +116,10 @@ const USAGE_DAY = 'ompChat.usageDay';       // globalState: model requests sent 
 const USAGE_URL_HINT = "Gateway's usage endpoint, {key} = the key; e.g. https://zyloris.com/api/gateway/subscription/check?apiKey={key}";
 const utcDay = () => new Date().toISOString().slice(0, 10); // OpenRouter's free-model quota resets at 00:00 UTC
 
-// Undo what send() prepends ("[Note: …]" lines, selection / current-file context) for display.
+// Undo what send() prepends ("[Note: …]" lines, selection / current-file context, mentions, attachments) for display.
 function splitUserText(text) {
   let context = null;
+  text = String(text || '');
   text = text.replace(/^(\[Note: [^\n]*\]\n)+\n/, '');
   text = text.replace(/^\[Plan mode: [^\n]*\]\n\n/, '');
   text = text.replace(/^\[Skills that may help with this request[^\n]*\]\n\n/, '');
@@ -126,9 +127,19 @@ function splitUserText(text) {
   if (!m) m = /^\[Current file: ([^\]\n]+)\]\n\n/.exec(text);
   if (m) { context = m[1]; text = text.slice(m[0].length); }
   const files = [];
+  m = /^\[Files the user attached;[^\n]*:\n([\s\S]*?)\]\n\n/.exec(text);
+  if (m) {
+    for (const line of m[1].split('\n')) {
+      const p = line.replace(/^- /, '').trim();
+      if (p) files.push(p); // the full path, so its chip opens it; shortLabel shows the name
+    }
+    text = text.slice(m[0].length);
+  }
   m = /^\[Attached files: ([^\]\n]+)\]\n\n/.exec(text);
   if (m) { files.push(...m[1].split(', ')); text = text.slice(m[0].length); }
-  while ((m = /^\[(?:Problems|Terminal output)[^\]\n]*\]\n```[^\n]*\n[\s\S]*?\n```\n\n/.exec(text))) text = text.slice(m[0].length);
+  while ((m = /^\[(?:Problems|Terminal output|Uncommitted changes|Git log|Open editors|Web page|Unsaved changes)[^\]\n]*\]\n```[^\n]*\n[\s\S]*?\n```\n\n/.exec(text))) {
+    text = text.slice(m[0].length);
+  }
   return { text, context, files };
 }
 
@@ -180,6 +191,12 @@ function allowedPattern(command, patterns) {
   if (SHELL_CONTROL.test(command)) return undefined;
   return patterns.find((p) => typeof p === 'string' && words(p) && globRe(p).test(words(command)));
 }
+// Denied patterns match the whole command or any part of a compound one (`cd x && rm -rf /`). omp enforces
+// them itself (bashDenyRules); this is the second check on an approval card.
+function deniedPattern(command, patterns) {
+  const parts = [command, ...command.split(/&&|\|\||[;|&\n]|\$\(|`/)].map(words).filter(Boolean);
+  return (Array.isArray(patterns) ? patterns : []).find((p) => typeof p === 'string' && words(p) && parts.some((c) => globRe(p).test(c)));
+}
 // What "Always allow" offers for a command: its first two words and anything after ("npm test*"), or the word alone.
 function suggestPattern(command) {
   const w = words(command).split(' ');
@@ -193,7 +210,7 @@ function toMarkdown(messages, model) {
     if (m.role === 'user') {
       const u = splitUserText(textOf(m.content));
       if (!u.text) continue;
-      const ctx = [u.context, ...u.files].filter(Boolean);
+      const ctx = [u.context, ...u.files].filter(Boolean).map(shortLabel);
       out.push(`## You${ctx.length ? `  \n_${ctx.join(', ')}_` : ''}`, u.text);
     } else if (m.role === 'assistant') {
       const parts = [];
@@ -221,10 +238,47 @@ function commandDirs(cwd) {
   ].filter(Boolean);
 }
 
-// ponytail: top-level *.md only; omp also reads nested folders as "dir:name", list those when someone needs them.
+// Supports both top-level *.md and nested folders ("dir:name"), matching omp's own command loader.
 function listCommandFiles(cwd) {
   const out = [];
-  for (const { dir, scope } of commandDirs(cwd)) {
+  const walk = (baseDir, relDir, scope) => {
+    let entries = [];
+    try { entries = fs.readdirSync(path.join(baseDir, relDir), { withFileTypes: true }); } catch { return; }
+    for (const ent of entries) {
+      if (ent.isDirectory() && !ent.name.startsWith('.')) {
+        walk(baseDir, relDir ? `${relDir}/${ent.name}` : ent.name, scope);
+      } else if (ent.isFile() && ent.name.endsWith('.md')) {
+        const file = path.join(baseDir, relDir, ent.name);
+        let text = '';
+        try { text = fs.readFileSync(file, 'utf8'); } catch { continue; }
+        const fm = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
+        const field = (k) => fm && new RegExp(`^${k}:\\s*(.*)$`, 'm').exec(fm[1])?.[1].trim().replace(/^["']|["']$/g, '');
+        const body = fm ? text.slice(fm[0].length) : text;
+        const description = field('description') || body.split('\n').find((l) => l.trim())?.trim().slice(0, 80) || '';
+        const base = ent.name.slice(0, -3);
+        const name = relDir ? `${relDir.replace(/\//g, ':')}:${base}` : base;
+        out.push({ name, file, scope, description, hint: field('argument-hint') || field('argumentHint') || '' });
+      }
+    }
+  };
+  for (const { dir, scope } of commandDirs(cwd)) walk(dir, '', scope);
+  return out;
+}
+
+// ---- custom subagents: Markdown agent definitions omp loads from .omp/agents and ~/.omp/agent/agents ----
+function agentDirs(cwd) {
+  const home = os.homedir();
+  return [
+    cwd && { dir: path.join(cwd, '.omp', 'agents'), scope: 'project' },
+    cwd && { dir: path.join(cwd, '.claude', 'agents'), scope: 'project · .claude' },
+    { dir: path.join(home, '.omp', 'agent', 'agents'), scope: 'all projects' },
+    { dir: path.join(home, '.claude', 'agents'), scope: 'all projects · .claude' },
+  ].filter(Boolean);
+}
+
+function listAgentFiles(cwd) {
+  const out = [];
+  for (const { dir, scope } of agentDirs(cwd)) {
     let names = [];
     try { names = fs.readdirSync(dir).filter((f) => f.endsWith('.md')); } catch { continue; }
     for (const f of names) {
@@ -235,10 +289,55 @@ function listCommandFiles(cwd) {
       const field = (k) => fm && new RegExp(`^${k}:\\s*(.*)$`, 'm').exec(fm[1])?.[1].trim().replace(/^["']|["']$/g, '');
       const body = fm ? text.slice(fm[0].length) : text;
       const description = field('description') || body.split('\n').find((l) => l.trim())?.trim().slice(0, 80) || '';
-      out.push({ name: f.slice(0, -3), file, scope, description, hint: field('argument-hint') || field('argumentHint') || '' });
+      out.push({ name: field('name') || f.slice(0, -3), file, scope, description, model: field('model') || '' });
     }
   }
   return out;
+}
+
+function agentFileText({ name, description, model, prompt }) {
+  const q = (s) => JSON.stringify(String(s).replace(/\r?\n/g, ' ').trim());
+  const fm = [name && `name: ${q(name)}`, description && `description: ${q(description)}`, model && `model: ${q(model)}`].filter(Boolean);
+  return `${fm.length ? `---\n${fm.join('\n')}\n---\n\n` : ''}${String(prompt).trim()}\n`;
+}
+
+// Recursively scan a directory (used for git worktree @ mentions where workspace.findFiles points at the main repo).
+function walkWorktreeFiles(root, max = 5000) {
+  const out = [];
+  const SKIP = new Set(['node_modules', '.git', 'dist', 'out', 'build']);
+  const walk = (dir, rel) => {
+    if (out.length >= max) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (out.length >= max) break;
+      if (e.isDirectory()) {
+        if (!SKIP.has(e.name)) walk(path.join(dir, e.name), rel ? `${rel}/${e.name}` : e.name);
+      } else if (e.isFile()) {
+        out.push(rel ? `${rel}/${e.name}` : e.name);
+      }
+    }
+  };
+  walk(root, '');
+  return out.sort();
+}
+
+// Terminal Shell Integration buffer (VS Code 1.93+): captures recent command output per terminal without touching clipboard.
+const terminalBuffers = new WeakMap();
+function captureTerminalExecution(term, stream, commandLine) {
+  const chunks = [];
+  if (commandLine) chunks.push(`$ ${commandLine}\n`);
+  (async () => {
+    try {
+      for await (const data of stream) {
+        chunks.push(String(data));
+        if (chunks.length > 400) chunks.splice(0, chunks.length - 400);
+        const prev = terminalBuffers.get(term) || '';
+        const merged = (prev + data).slice(-24000);
+        terminalBuffers.set(term, merged);
+      }
+    } catch {}
+  })();
 }
 
 function commandFileText({ description, hint, prompt }) {
@@ -322,7 +421,7 @@ function sessionSummary(file) {
 
 // "src/a.ts:12:3", "src/a.ts#L12-L20" or "src/a.ts" -> { file, line, col }.
 function parseFileRef(ref) {
-  const m = /^(.*?)(?::(\d+)(?::(\d+))?|#L(\d+)(?:-L?\d+)?)?$/.exec(String(ref).trim());
+  const m = /^(.*?)(?::(\d+)(?:-\d+|:(\d+))?|#L(\d+)(?:-L?\d+)?)?$/.exec(String(ref).trim()); // file:10-20 opens at 10
   return { file: m[1], line: +(m[2] || m[4] || 0), col: +(m[3] || 0) };
 }
 
@@ -342,14 +441,19 @@ const LANG_IDS = { js: 'javascript', jsx: 'javascriptreact', ts: 'typescript', t
   bash: 'shellscript', zsh: 'shellscript', shell: 'shellscript', ps1: 'powershell', pwsh: 'powershell', md: 'markdown', yml: 'yaml',
   rs: 'rust', cs: 'csharp', rb: 'ruby', kt: 'kotlin', 'c++': 'cpp', golang: 'go' };
 
+let chatIdSeq = 0;
+
 class ChatProvider {
   // opts.tab: a chat in an editor tab (its own omp; does not take over the sidebar's last conversation).
   // opts.worktree: { top, branch, base, path, cwd } when the tab works in its own git worktree.
   constructor(context, opts = {}) {
+    this.id = 'c' + ++chatIdSeq;
     this.context = context;
     this.tab = !!opts.tab;
     this.title = opts.title || 'OMP Chat';
     this.worktree = opts.worktree || null;
+    this.modelOverride = null;   // per-tab model override (does not affect other tabs)
+    this.modeOverride = null;    // per-tab approval mode override
     this.dictionary = loadDictionary(context.extensionUri?.fsPath || '');
     this.dict = l10n.compile(this.dictionary);
     this.view = null;
@@ -377,7 +481,21 @@ class ChatProvider {
     this.qSeq = 0;
     this.pinned = [];            // files you attached to every message until removed (workspace-relative)
     this.turnUsage = null;       // tokens and cost summed over one agent turn
+    this.sessionCost = 0;        // cumulative session cost for budget alerts
+    this.budgetWarned = false;
+    this.favChanged = false;     // true when ★ models changed since omp started
+    this.quietChain = Promise.resolve();
+    this.meterTimer = null;
+    this.reviewSub = review.onChange(() => this.postReview());
     this.newReadyPromise();
+  }
+
+  effectiveModel() {
+    return this.modelOverride || this.modelName || vscode.workspace.getConfiguration('ompChat').get('model');
+  }
+
+  effectiveMode() {
+    return this.modeOverride || vscode.workspace.getConfiguration('ompChat').get('approvalMode');
   }
 
   // UI text in VS Code's language when there is a dictionary for it (English otherwise).
@@ -396,17 +514,26 @@ class ChatProvider {
     };
     view.webview.html = this.html(view.webview);
     view.webview.onDidReceiveMessage((m) => this.onWebviewMessage(m));
-    view.onDidDispose(() => { this.view = null; });
+    view.onDidDispose(() => {
+      this.view = null;
+      clearInterval(this.meterTimer);
+      this.meterTimer = null;
+    });
     view.onDidChangeVisibility?.(() => { // looking at the panel clears "done, not seen yet"
       // and brings the quota up to date (at most one provider call a minute: account() caches)
       if (view.visible) { this.unseenDone = false; this.refreshStatus(); this.refreshMeter(); }
     });
+    // Refresh gateway / plan quota every 5 minutes while visible (so rolling windows update on their own).
+    clearInterval(this.meterTimer);
+    this.meterTimer = setInterval(() => { if (this.view?.visible) this.refreshMeter(); }, 5 * 60e3);
+    if (this.meterTimer.unref) this.meterTimer.unref();
     this.boot();
   }
 
   // First use: ask once for a provider + key, then start omp right away instead of on the first message.
   // Dismissing is fine: omp may have its own login, and a 401 later points to "Set API Key".
   async boot() {
+    this.pruneAttachments();
     const saved = await keys.envFor(this.context);
     const hasKey = Object.keys(saved).length > 0 || PROVIDERS.some((p) => process.env[p.env]);
     if (!hasKey && !this.context.globalState?.get('ompChat.keyPrompted')) {
@@ -418,6 +545,33 @@ class ChatProvider {
     if (!this.client && last && sessionSummary(last)) this.resume = { file: last, replay: true };
     await this.ensureClient();
     this.listSkills().catch(() => {}); // warm the skill list so auto-pick does not delay the first message
+  }
+
+  // Remove uploaded attachment folders older than 30 days or past 200 MB total.
+  pruneAttachments(forceAll = false) {
+    const root = this.context.globalStorageUri?.fsPath && path.join(this.context.globalStorageUri.fsPath, 'attachments');
+    if (!root || !fs.existsSync(root)) return 0;
+    let removed = 0;
+    try {
+      const cutoff = Date.now() - 30 * 864e5;
+      const dirs = fs.readdirSync(root).map((name) => {
+        const full = path.join(root, name);
+        try {
+          const st = fs.statSync(full);
+          if (!st.isDirectory()) return null;
+          let bytes = 0;
+          for (const f of fs.readdirSync(full)) { try { bytes += fs.statSync(path.join(full, f)).size; } catch {} }
+          return { full, mtime: st.mtimeMs, bytes };
+        } catch { return null; }
+      }).filter(Boolean).sort((a, b) => a.mtime - b.mtime); // oldest first
+      let total = dirs.reduce((s, d) => s + d.bytes, 0);
+      for (const d of dirs) {
+        if (forceAll || d.mtime < cutoff || total > 200e6) {
+          try { fs.rmSync(d.full, { recursive: true, force: true }); total -= d.bytes; removed++; } catch {}
+        }
+      }
+    } catch {}
+    return removed;
   }
 
   post(msg) {
@@ -496,10 +650,15 @@ class ChatProvider {
   // that message or still running from an earlier one.
   mapState() {
     const since = this.lead?.startedAt || 0;
-    const pick = ({ id, agent, task, status, model, intent, tool, toolArgs, tools, steps, startedAt, endedAt, parentAgent }) =>
-      ({ id, agent, task, status, model, intent, tool, toolArgs, tools, steps, startedAt, endedAt, parentAgent });
+    const pick = ({ id, agent, task, status, model, intent, tool, toolArgs, tools, steps, tokens, cost, ms, startedAt, endedAt, parentAgent }) =>
+      ({ id, agent, task, status, model, intent, tool, toolArgs, tools, steps, tokens, cost, ms, startedAt, endedAt, parentAgent });
     const agents = [...this.subagents.values()].filter((s) => s.status === 'running' || s.startedAt >= since);
     return { lead: this.lead, agents: agents.map(pick), now: Date.now() };
+  }
+
+  async stopAllSubagents(onError) {
+    const running = [...this.subagents.values()].filter((s) => s.status === 'running');
+    await Promise.all(running.map((s) => this.subagentControl('stop', s.id, '', onError)));
   }
 
   // The subagent's own conversation (works after it finished too), simplified for the map's chat pane.
@@ -599,33 +758,39 @@ class ChatProvider {
   // Add a key from a form in the panel; `intro` is the first-run welcome. Returns true if a key was saved.
   async addKeyForm(intro, providerLabel) {
     await this.reveal();
+    const initial = PROVIDERS.find((x) => x.label === providerLabel) || PROVIDERS[0];
     const v = await this.ask({
       title: intro ? 'Connect a model provider' : 'Add an API key',
       text: intro ? 'OMP Chat runs the omp agent with your own API key. Skip this if omp already has a login of its own.' : '',
       fields: [
         // The form shows where to get a key for the provider picked, from each option's link.
-        { name: 'provider', label: 'Provider', type: 'select', value: providerLabel || PROVIDERS[0].label,
-          options: PROVIDERS.map((p) => ({ value: p.label, label: `${p.label} — ${p.description}`, link: p.url })) },
-        { name: 'key', label: 'API key', type: 'password', placeholder: 'Paste the key', required: true },
+        { name: 'provider', label: 'Provider', type: 'select', value: initial.label,
+          options: PROVIDERS.map((p) => ({ value: p.label, label: `${p.label} — ${p.description}`, link: p.url, defaultBaseUrl: p.defaultBaseUrl || '', optionalKey: !!p.optionalKey })) },
+        { name: 'key', label: 'API key', type: 'password', placeholder: initial.optionalKey ? 'Optional for local servers (leave blank)' : 'Paste the key', required: !initial.optionalKey },
         { name: 'label', label: 'Name (optional)', placeholder: 'e.g. work, personal' },
-        { name: 'baseUrl', label: 'Base URL (optional)', placeholder: "Proxy or compatible endpoint; empty = the provider's own" },
+        { name: 'baseUrl', label: 'Base URL (optional)', value: initial.defaultBaseUrl || '', placeholder: "Proxy or compatible endpoint; empty = the provider's own" },
         { name: 'usageUrl', label: 'Usage URL (optional)', placeholder: USAGE_URL_HINT },
       ],
       submit: 'Save key', cancel: intro ? 'Skip' : 'Cancel',
     });
-    if (!v?.key?.trim()) {
+    if (!v) {
       if (intro) this.post({ type: 'notice', text: 'Have a ChatGPT or Claude plan instead of a key? Sign in with it.', actions: [{ label: 'Sign in…', cmd: 'login' }] });
       return false;
     }
-    const baseUrl = keys.normalizeBaseUrl(v.baseUrl), usageUrl = keys.normalizeBaseUrl(v.usageUrl);
+    const p = PROVIDERS.find((x) => x.label === v.provider) || PROVIDERS[0];
+    const rawKey = v.key?.trim() || (p.optionalKey ? 'local' : '');
+    if (!rawKey) {
+      if (intro) this.post({ type: 'notice', text: 'Have a ChatGPT or Claude plan instead of a key? Sign in with it.', actions: [{ label: 'Sign in…', cmd: 'login' }] });
+      return false;
+    }
+    const baseUrl = keys.normalizeBaseUrl(v.baseUrl || p.defaultBaseUrl), usageUrl = keys.normalizeBaseUrl(v.usageUrl);
     if (baseUrl === null || usageUrl === null) {
       this.post({ type: 'error', text: `"${baseUrl === null ? v.baseUrl : v.usageUrl}" is not an http(s) URL; the key was not saved.` });
       return false;
     }
-    const p = PROVIDERS.find((x) => x.label === v.provider) || PROVIDERS[0];
     const count = (await keys.loadKeys(this.context, p.env)).length;
     const label = v.label?.trim() || (count ? `${p.label} ${count + 1}` : p.label);
-    await keys.addKey(this.context, p.env, label, v.key.trim(), baseUrl, p.prefix.slice(0, -1), usageUrl);
+    await keys.addKey(this.context, p.env, label, rawKey, baseUrl, p.prefix.slice(0, -1), usageUrl);
     // Move to this provider when the current model has no key to run with.
     const cfg = vscode.workspace.getConfiguration('ompChat');
     const cur = keys.providerOf(cfg.get('model'));
@@ -637,6 +802,16 @@ class ChatProvider {
     this.post({ type: 'notice', text: `Saved "${label}" for ${keys.groupLabel(p.env)}; it is now the active key.` });
     await this.restart(); // keys reach omp through its environment; the conversation is resumed
     return true;
+  }
+
+  async testSavedKey(env, id) {
+    const list = await keys.loadKeys(this.context, env);
+    const k = list.find((x) => x.id === id);
+    if (!k) return;
+    const p = PROVIDERS.find((x) => x.prefix === `${k.provider}/`) || PROVIDERS.find((x) => x.env === env);
+    const provider = k.provider || p?.prefix.slice(0, -1) || '';
+    const res = await keys.testKey(provider, k.key, k.baseUrl, k.usageUrl, this.installId());
+    this.post({ type: 'keyTest', id, ok: res.ok, message: res.message });
   }
 
   async keyGroups() {
@@ -704,12 +879,20 @@ class ChatProvider {
 
   // Everything the webview shows outside the chat log; sent when it (re)loads.
   sync() {
-    this.post({ type: 'mode', mode: vscode.workspace.getConfiguration('ompChat').get('approvalMode') });
-    this.post({ type: 'model', name: this.modelName || vscode.workspace.getConfiguration('ompChat').get('model') });
+    this.post({ type: 'mode', mode: this.effectiveMode() });
+    this.post({ type: 'model', name: this.effectiveModel() });
     this.post({ type: 'thinking_level', level: thinkingLevel(vscode.workspace.getConfiguration('ompChat')) });
     this.post({ type: 'commands', list: this.commands });
     this.postContext();
     this.postSession();
+    this.postReview();
+    if (this.worktree) this.post({ type: 'worktree', branch: this.worktree.branch, path: this.worktree.path });
+    // Always sync quota/meter once the webview is listening (fixes startup race before ready).
+    this.refreshMeter();
+  }
+
+  postReview() {
+    this.post({ type: 'reviewState', files: review.pendingSummary(this) });
   }
 
   async onWebviewMessage(m) {
@@ -718,16 +901,19 @@ class ChatProvider {
       case 'send': return this.send(m.text, m.withContext, m.images, [], m.files);
       case 'dropUris': return this.post({ type: 'attachPaths', list: droppedPaths(m.uris) });
       case 'stop': return this.stop();
+      case 'retryTurn': return this.send('/retry');
       case 'new': return this.newSession();
       case 'dialogAnswer': return this.dialogs.get(m.id)?.answer?.(m.value);
       case 'formAnswer': return this.answerForm(m.id, m.values);
       case 'listFiles': return this.listFiles();
       case 'pickModel': return this.pickModel();
-      case 'setModel': return vscode.workspace.getConfiguration('ompChat').update('model', m.id, vscode.ConfigurationTarget.Global);
+      case 'setModel': return this.switchModel(m.id);
       case 'history': return this.pickSession();
       case 'openSession': return this.openSession(m.file);
       case 'renameSession': return this.renameSession(m.file);
       case 'deleteSession': return this.deleteSession(m.file);
+      case 'pinSession': return this.togglePinSession(m.file);
+      case 'searchSessions': return this.searchSessions(String(m.query || ''));
       case 'openFile': return this.openFile(m.ref);
       case 'checkPaths': { // which `path` spans in a reply are real files, so the panel can make them links
         const refs = (Array.isArray(m.refs) ? m.refs : []).slice(0, 200).map(String);
@@ -742,6 +928,7 @@ class ChatProvider {
       case 'setApiKey': return this.manageKeys();
       case 'login': return this.login();
       case 'addKey': return this.addKeyForm(false, m.provider);
+      case 'testKey': return this.testSavedKey(m.env, m.id);
       case 'useKey': await this.useKey(m.env, m.id); return m.from === 'keys' ? this.showKeys() : this.showUsage();
       case 'renameKey': return this.renameKey(m.env, m.id, m.label);
       case 'removeKey': return this.removeKey(m.env, m.id);
@@ -755,8 +942,10 @@ class ChatProvider {
       case 'openMap': return this.openMap(m.id);
       case 'subagentStop': return this.subagentControl('stop', m.id);
       case 'subagentSteer': return this.subagentControl('steer', m.id, m.text);
+      case 'stopAllSubagents': return this.stopAllSubagents();
       case 'toggleFavorite': await this.toggleFavorite(m.id); return m.from === 'sheet' ? this.showModelsSheet() : undefined;
       case 'moveFavorite': return this.moveFavorite(m.id, m.dir);
+      case 'applyFavorites': this.favChanged = false; await this.restart(); return this.post({ type: 'notice', text: 'Agent restarted with your updated model pool.' });
       case 'manageModels': return this.showModelsSheet();
       case 'pinFile': return this.pinFile(String(m.rel || ''));
       case 'unpinFile': return this.unpinFile(m.rel);
@@ -765,11 +954,30 @@ class ChatProvider {
       case 'newCommand': return this.newCommand();
       case 'editCommand': return this.editCommand(m.file);
       case 'deleteCommand': return this.deleteCommand(m.file);
+      case 'agentsSheet': return this.showAgents();
+      case 'newAgent': return this.newAgent();
+      case 'editAgent': return this.editAgent(m.file);
+      case 'deleteAgent': return this.deleteAgent(m.file);
+      case 'memorySheet': return this.showMemory();
+      case 'addMemory': return this.addMemoryNote(m.note);
+      case 'deleteMemory': return this.deleteMemoryLine(m.index);
+      case 'openMemoryFile': return this.openMemoryFile();
+      case 'rulesSheet': return this.showCommandRules();
+      case 'addRule': return this.addCommandRule(m.kind, m.pattern);
+      case 'removeRule': return this.removeCommandRule(m.kind, m.pattern);
       case 'mcp': return this.showMcp();
       case 'mcpAction': return this.mcpAction(m.kind, m.name);
       case 'addMcp': return this.addMcp();
+      case 'openMcpConfig': return this.openMcpConfig(m.scope);
       case 'applyMcp': return this.applyMcp();
-      case 'applyPlugins': return this.applyPlugins(Array.isArray(m.disabled) ? m.disabled : [], m.auto);
+      case 'applyPlugins': return this.applyPlugins(Array.isArray(m.disabled) ? m.disabled : [], m.auto, Array.isArray(m.pinned) ? m.pinned : undefined);
+      case 'reviewOpen': return this.openFile(m.path);
+      case 'reviewCompare': return vscode.commands.executeCommand('ompChat.compareReview', vscode.Uri.file(m.path));
+      case 'reviewAcceptFile': return review.decideAll(vscode.Uri.file(m.path), true);
+      case 'reviewRejectFile': return review.decideAll(vscode.Uri.file(m.path), false);
+      case 'reviewAcceptAll': return review.decideOwner(this, true);
+      case 'reviewRejectAll': return review.decideOwner(this, false);
+      case 'worktreeAction': return this.worktreeAction(m.kind);
       case 'action': // buttons on error / notice lines
         switch (m.cmd) {
           case 'pickModel': return this.pickModel();
@@ -781,19 +989,39 @@ class ChatProvider {
           case 'setOmpPath': return this.setOmpPath();
           case 'retry': return this.retry();
           case 'openUrl': return vscode.env.openExternal(vscode.Uri.parse(m.arg));
-          case 'setModel': return vscode.workspace.getConfiguration('ompChat').update('model', m.arg, vscode.ConfigurationTarget.Global);
+          case 'setModel': return this.switchModel(m.arg);
           case 'revertForce': return this.revert(m.arg, true);
           case 'openFile': return this.openFile(m.arg);
           case 'continueTurn': return this.send('Continue where you left off.');
           case 'compact': return this.send('/compact');
+          case 'applyFavorites': this.favChanged = false; return this.restart();
         }
         return;
-      case 'setMode':
-        return vscode.workspace.getConfiguration('ompChat').update('approvalMode', m.mode, vscode.ConfigurationTarget.Global);
+      case 'setMode': return this.switchMode(m.mode);
       case 'openDiff': return this.openDiff(m.id);
       case 'openEdit': return this.edits.has(m.id) && vscode.window.showTextDocument(vscode.Uri.file(this.edits.get(m.id).path), { preview: false });
       case 'revert': return this.revert(m.id);
     }
+  }
+
+  // Per-tab model/mode override: tabs switch locally without restarting other open chats; sidebar updates global settings.
+  async switchModel(id) {
+    if (!id) return;
+    if (this.tab) {
+      this.modelOverride = id;
+      return this.applyModelLive(id);
+    }
+    return vscode.workspace.getConfiguration('ompChat').update('model', id, vscode.ConfigurationTarget.Global);
+  }
+
+  async switchMode(mode) {
+    if (!mode) return;
+    if (this.tab) {
+      this.modeOverride = mode;
+      this.post({ type: 'mode', mode });
+      return this.restart();
+    }
+    return vscode.workspace.getConfiguration('ompChat').update('approvalMode', mode, vscode.ConfigurationTarget.Global);
   }
 
   // Shared promise so concurrent callers (boot, send, New, settings change) spawn only one omp.
@@ -811,9 +1039,12 @@ class ChatProvider {
     this.cwd = this.worktree?.cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd();
 
     // Plan mode is OMP Chat's own (omp's /plan is terminal-only): omp asks for every edit/command and we deny them.
-    const mode = cfg.get('approvalMode') === 'plan' ? 'always-ask' : cfg.get('approvalMode');
-    const overlay = this.overlayArgs(); // before systemPromptArgs: it snapshots the ★ pool the prompt lists
-    const args = ['--mode', 'rpc', '--model', cfg.get('model'), ...(mode ? ['--approval-mode', mode] : []), `--thinking=${thinkingLevel(cfg)}`,
+    const rawMode = this.effectiveMode();
+    const mode = rawMode === 'plan' ? 'always-ask' : rawMode;
+    const modelArg = this.modelOverride || cfg.get('model');
+    this.favChanged = false;
+    const overlay = this.overlayArgs(await this.bashDenyRules(cfg)); // before systemPromptArgs: it snapshots the ★ pool the prompt lists
+    const args = ['--mode', 'rpc', '--model', modelArg, ...(mode ? ['--approval-mode', mode] : []), `--thinking=${thinkingLevel(cfg)}`,
       ...this.systemPromptArgs(cfg), // a later one in extraArgs wins
       ...overlay, ...this.baseUrlArgs(baseUrls), ...cfg.get('extraArgs', [])];
     const ompPath = cfg.get('ompPath') || 'omp';
@@ -982,7 +1213,8 @@ class ChatProvider {
           if (!u.text && !images.length) continue;
           if (unanswered) this.post({ type: 'notice', text: 'No reply: this request failed.' });
           // turn = position among omp's user entries; Rewind uses it to find the entry again.
-          this.post({ type: 'user', text: u.text, context: [u.context, ...u.files].filter(Boolean).map(shortLabel), images, turn: ++this.turnSeq });
+          const refs = [u.context, ...u.files].filter(Boolean);
+          this.post({ type: 'user', text: u.text, context: refs.map(shortLabel), refs, images, turn: ++this.turnSeq });
           unanswered = true;
         } else if (m.role === 'assistant') {
           unanswered = false;
@@ -1018,19 +1250,66 @@ class ChatProvider {
     this.post({ type: 'sessions', list });
   }
 
-  // Conversations saved next to `current` (omp keeps one folder per workspace), newest first.
+  pinnedSessions() { return this.context.workspaceState?.get('ompChat.pinnedSessions') || []; }
+
+  async togglePinSession(file) {
+    if (!this.sessionFileOk(file)) return;
+    const cur = this.pinnedSessions();
+    const norm = path.resolve(file);
+    const next = cur.includes(norm) ? cur.filter((x) => x !== norm) : [norm, ...cur].slice(0, 20);
+    await this.context.workspaceState?.update('ompChat.pinnedSessions', next);
+    return this.pickSession();
+  }
+
+  // Full-text search across workspace conversation JSONL files (for History picker search).
+  searchSessions(query) {
+    const q = String(query || '').trim().toLowerCase();
+    if (!this.sessionDir || !q) return;
+    const pinned = new Set(this.pinnedSessions());
+    let files = [];
+    try { files = fs.readdirSync(this.sessionDir).filter((f) => f.endsWith('.jsonl')).map((f) => path.join(this.sessionDir, f)); } catch {}
+    const hits = [];
+    for (const file of files) {
+      let stat;
+      try { stat = fs.statSync(file); } catch { continue; }
+      const s = sessionSummary(file);
+      if (!s) continue;
+      let snippet = '';
+      if (s.title.toLowerCase().includes(q)) snippet = s.title;
+      else {
+        try {
+          const raw = fs.readFileSync(file, 'utf8');
+          const idx = raw.toLowerCase().indexOf(q);
+          if (idx < 0) continue;
+          const lineStart = raw.lastIndexOf('\n', idx) + 1;
+          const lineEnd = raw.indexOf('\n', idx);
+          const rec = JSON.parse(raw.slice(lineStart, lineEnd < 0 ? undefined : lineEnd));
+          const txt = rec?.type === 'message' ? textOf(rec.message?.content) : '';
+          const p = txt.toLowerCase().indexOf(q);
+          snippet = p >= 0 ? txt.slice(Math.max(0, p - 30), p + q.length + 50).replace(/\s+/g, ' ').trim() : '';
+        } catch { continue; }
+      }
+      hits.push({ file, title: s.title, when: stat.mtimeMs, current: this.isCurrentSession(file), pinned: pinned.has(path.resolve(file)), snippet });
+      if (hits.length >= 60) break;
+    }
+    hits.sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.when - a.when);
+    this.post({ type: 'sessionSearchResults', query, list: hits });
+  }
+
+  // Conversations saved next to `current` (omp keeps one folder per workspace), pinned first then newest first.
   listSessions(current, max) {
     const dir = this.sessionDir = path.dirname(current);
+    const pinned = new Set(this.pinnedSessions());
     let files = [];
     try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl')).map((f) => path.join(dir, f)); } catch {}
     return files
-      .map((file) => { try { return { file, mtime: fs.statSync(file).mtimeMs }; } catch { return null; } }) // deleted meanwhile
+      .map((file) => { try { return { file, mtime: fs.statSync(file).mtimeMs, pinned: pinned.has(path.resolve(file)) }; } catch { return null; } }) // deleted meanwhile
       .filter(Boolean)
-      .sort((a, b) => b.mtime - a.mtime)
+      .sort((a, b) => Number(b.pinned) - Number(a.pinned) || b.mtime - a.mtime)
       .slice(0, max)
-      .map(({ file, mtime }) => {
+      .map(({ file, mtime, pinned: isPinned }) => {
         const s = sessionSummary(file);
-        return s && { file, title: s.title, when: mtime, current: path.resolve(file) === path.resolve(current) };
+        return s && { file, title: s.title, when: mtime, pinned: isPinned, current: path.resolve(file) === path.resolve(current) };
       })
       .filter(Boolean);
   }
@@ -1110,7 +1389,8 @@ class ChatProvider {
     const abs = this.resolveFile(file);
     if (!abs) return this.post({ type: 'notice', text: `Could not find ${file} in the workspace.` });
     const pos = new vscode.Position(Math.max(0, line - 1), Math.max(0, col - 1));
-    await vscode.window.showTextDocument(vscode.Uri.file(abs), { preview: true, selection: new vscode.Range(pos, pos) });
+    try { await vscode.window.showTextDocument(vscode.Uri.file(abs), { preview: true, selection: new vscode.Range(pos, pos) }); }
+    catch { await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(abs)); } // binary (an attached PDF…): its own viewer
   }
 
   // The editor you were last in (the panel has focus, so activeTextEditor may be gone).
@@ -1151,6 +1431,7 @@ class ChatProvider {
   async toggleFavorite(id) {
     const fav = this.favoriteModels();
     await this.setFavorites(fav.includes(id) ? fav.filter((x) => x !== id) : [...fav, id]);
+    this.favChanged = true;
   }
 
   async moveFavorite(id, dir) {
@@ -1159,6 +1440,7 @@ class ChatProvider {
     if (i < 0 || j < 0 || j >= fav.length) return;
     [fav[i], fav[j]] = [fav[j], fav[i]];
     await this.setFavorites(fav);
+    this.favChanged = true;
     return this.showModelsSheet();
   }
 
@@ -1170,8 +1452,8 @@ class ChatProvider {
     try { all = await this.modelList(); }
     catch (e) { this.post({ type: 'error', text: `Could not list models: ${e.message}` }); }
     const names = new Map(all.map((x) => [x.id, x.name]));
-    this.post({ type: 'modelsSheet', current: this.modelName || vscode.workspace.getConfiguration('ompChat').get('model'),
-      favorites: this.favoriteModels().map((id) => ({ id, name: names.get(id) || '' })), all });
+    this.post({ type: 'modelsSheet', current: this.effectiveModel(),
+      favorites: this.favoriteModels().map((id) => ({ id, name: names.get(id) || '' })), all, favChanged: !!this.favChanged });
   }
 
   onRecord(r) {
@@ -1282,6 +1564,14 @@ class ChatProvider {
         break;
       case 'config_update':
         this.setModel(r.model);
+        this.accountCache = null;
+        this.refreshMeter();
+        break;
+      case 'bash_output':
+      case 'bash_update':
+        if (this.activeShellId && (r.chunk || r.output || r.delta)) {
+          this.post({ type: 'shell_update', id: this.activeShellId, chunk: String(r.chunk || r.delta || ''), output: r.output ? String(r.output).slice(-8000) : undefined });
+        }
         break;
       // pi emits agent_settled after retries/compaction; omp may only emit
       // agent_end. Treat either as "idle"; a later agent_start flips back.
@@ -1289,6 +1579,7 @@ class ChatProvider {
       case 'agent_end':
         if (this.turnUsage && !this.replaying && this.turnUsage.input + this.turnUsage.output > 0) {
           this.post({ type: 'turnStats', ...this.turnUsage, seconds: Math.round((Date.now() - this.turnUsage.started) / 1000) });
+          this.recordCost(this.turnUsage.cost || 0);
         }
         this.turnUsage = null;
         this.post({ type: 'idle' });
@@ -1296,7 +1587,8 @@ class ChatProvider {
         if (this.blocked) { this.explainBlocked(this.blocked); this.blocked = null; }
         else if (this.quotaHit) { this.quotaHit = false; this.rotateKey(); }
         else {
-          this.refreshMeter();
+          // Force-refresh after a turn completes so gateway/plan quota updates live (never stuck on 60s cache).
+          this.refreshMeter(true);
           if (!this.replaying) this.checkClaimedFiles();
           // Plan mode: once the agent has written its plan, offer to carry it out (like Claude Code).
           if (this.wroteText && !this.replaying && this.planMode()) this.post({ type: 'planReady' });
@@ -1335,20 +1627,21 @@ class ChatProvider {
   }
 
   planMode() {
-    return vscode.workspace.getConfiguration('ompChat').get('approvalMode') === 'plan';
+    return this.effectiveMode() === 'plan';
   }
 
   // Leave plan mode for `mode` (omp respawns on the same conversation), then ask the agent to carry out the plan.
   async executePlan(mode, delegate) {
     // After the restart, so the overlay (and the model pool in the prompt) are the fresh ones.
     this.afterRestart = () => this.send(delegate ? this.delegatePrompt() : 'Go ahead and implement the plan above.', false);
-    await vscode.workspace.getConfiguration('ompChat').update('approvalMode', mode, vscode.ConfigurationTarget.Global);
+    await this.switchMode(mode);
   }
 
   // ---- plugins & skills ----
   // Skills switched off in this workspace reach omp as a per-run config overlay (`--config`), so neither
   // Claude Code's nor omp's own settings are touched. Changing them respawns omp on the same conversation.
   disabledSkills() { return this.context.workspaceState?.get('ompChat.disabledSkills') || []; }
+  pinnedSkills() { return this.context.workspaceState?.get('ompChat.pinnedSkills') || []; }
   autoSkills() { return this.context.workspaceState?.get('ompChat.autoSkills') ?? true; }
 
   // The models subagents may run on: the one in use plus your models (★), as the lead can only pick models the
@@ -1358,13 +1651,31 @@ class ChatProvider {
     return [...new Set([cur, ...this.favoriteModels()].filter(Boolean))].slice(0, 8);
   }
 
-  overlayArgs() {
+  // ompChat.deniedCommands as omp's own `bash.patterns` deny rules: omp checks them on every bash call, and on each
+  // part of a compound one (`cd x && rm -rf /`), in every approval mode including yolo. The overlay replaces the
+  // array, so your own rules (`omp config get`) follow ours. null when nothing is denied.
+  async bashDenyRules(cfg) {
+    const denied = [].concat(cfg.get('deniedCommands', [])).filter((p) => typeof p === 'string' && words(p));
+    if (!denied.length) return null;
+    const ompPath = cfg.get('ompPath') || 'omp';
+    const command = (ompPath === 'omp' && this.ompFallback?.omp) || ompPath;
+    const own = await new Promise((resolve) => {
+      require('child_process').execFile(command, ['config', 'get', 'bash.patterns', '--json'], { cwd: this.cwd, timeout: 15000 }, (err, out) => {
+        // ponytail: an omp without `config get` loses your own bash.patterns for this session; the denies still apply
+        try { resolve(err ? [] : [].concat(JSON.parse(out).value || [])); } catch { resolve([]); }
+      });
+    });
+    return [...denied.map((p) => ({ match: words(p), approval: 'deny' })), ...own];
+  }
+
+  overlayArgs(bashRules) {
     const off = this.disabledSkills();
     const pool = this.taskPool = this.taskModelPool();
     const dir = (this.context.storageUri || this.context.globalStorageUri)?.fsPath;
-    if ((!off.length && pool.length < 2) || !dir) return [];
+    if ((!off.length && pool.length < 2 && !bashRules) || !dir) return [];
     const overlay = {}; // JSON is valid YAML
     if (off.length) overlay.disabledExtensions = off.map((n) => 'skill:' + n);
+    if (bashRules) overlay.bash = { patterns: bashRules };
     if (pool.length > 1) {
       // Roles configured outside project settings are what omp lets a task's `model` pick; ours do not touch
       // omp's own roles (smol, slow…).
@@ -1443,14 +1754,16 @@ class ChatProvider {
     try { groups = await this.listSkills(force); }
     catch (e) { return this.post({ type: 'error', text: `Could not list plugins: ${e.message}` }); }
     const off = new Set(this.disabledSkills());
+    const pin = new Set(this.pinnedSkills());
     this.post({ type: 'plugins', auto: this.autoSkills(),
-      groups: groups.map((g) => ({ ...g, skills: g.skills.map((s) => ({ ...s, enabled: !off.has(s.name) })) })) });
+      groups: groups.map((g) => ({ ...g, skills: g.skills.map((s) => ({ ...s, enabled: !off.has(s.name), pinned: pin.has(s.name) })) })) });
   }
 
-  async applyPlugins(disabled, auto) {
+  async applyPlugins(disabled, auto, pinned) {
     const ws = this.context.workspaceState;
     const before = this.disabledSkills();
     await ws?.update('ompChat.autoSkills', !!auto);
+    if (Array.isArray(pinned)) await ws?.update('ompChat.pinnedSkills', [...new Set(pinned)]);
     const changed = before.length !== disabled.length || before.some((n) => !disabled.includes(n));
     if (!changed) return this.post({ type: 'notice', text: `Auto-pick is ${auto ? 'on' : 'off'}.` });
     await ws?.update('ompChat.disabledSkills', disabled);
@@ -1460,15 +1773,20 @@ class ChatProvider {
   }
 
   // Run one of omp's own slash commands for the panel and return its output instead of printing it in the chat.
-  // omp answers a local command only after its output, so the output is complete when the request resolves.
-  async quietCommand(message) {
-    const client = await this.ensureClient();
-    if (!client) throw new Error('omp is not running');
-    const out = [];
-    this.quietSink = out;
-    try { await client.request({ type: 'prompt', message }); }
-    finally { this.quietSink = null; }
-    return out.join('\n').trim();
+  // Serialized via quietChain so concurrent calls never overwrite quietSink.
+  quietCommand(message) {
+    const run = async () => {
+      const client = await this.ensureClient();
+      if (!client) throw new Error('omp is not running');
+      const out = [];
+      this.quietSink = out;
+      try { await client.request({ type: 'prompt', message }); }
+      finally { this.quietSink = null; }
+      return out.join('\n').trim();
+    };
+    const next = this.quietChain.then(run, run);
+    this.quietChain = next.catch(() => {});
+    return next;
   }
 
   // ---- your own slash commands ----
@@ -1557,6 +1875,8 @@ class ChatProvider {
         { name: 'kind', label: 'Type', type: 'select', value: 'command',
           options: [{ value: 'command', label: 'Local: run a command' }, { value: 'url', label: 'Remote: URL (HTTP)' }] },
         { name: 'target', label: 'Command or URL', placeholder: 'npx -y @modelcontextprotocol/server-…  or  https://…', required: true },
+        { name: 'env', label: 'Env vars or HTTP headers (optional, KEY=VALUE per line)', type: 'textarea',
+          placeholder: 'GITHUB_TOKEN=ghp_…\nAuthorization=Bearer …' },
         { name: 'scope', label: 'Save for', type: 'select', value: 'project',
           options: [{ value: 'project', label: 'This project (.omp/mcp.json)' }, { value: 'user', label: 'All projects' }] },
       ],
@@ -1570,8 +1890,41 @@ class ChatProvider {
     let out;
     try { out = await this.quietCommand(`/mcp add ${name} --scope ${scope} ${v.kind === 'url' ? `--url ${target}` : `-- ${target}`}`); }
     catch (e) { out = e.message; }
+    // Optional KEY=VALUE lines: merge into the scope's mcp.json under env (local) or headers (remote).
+    const pairs = {};
+    for (const line of String(v.env || '').split(/\r?\n/)) {
+      const m = /^\s*([A-Za-z0-9_.-]+)\s*=\s*(.+?)\s*$/.exec(line);
+      if (m) pairs[m[1]] = m[2];
+    }
+    if (Object.keys(pairs).length) {
+      const cfgFile = this.mcpConfigPath(scope);
+      try {
+        const json = fs.existsSync(cfgFile) ? JSON.parse(fs.readFileSync(cfgFile, 'utf8')) : { mcpServers: {} };
+        const bucket = json.mcpServers || json.servers || (json.mcpServers = {});
+        if (bucket[name]) {
+          const field = v.kind === 'url' ? 'headers' : 'env';
+          bucket[name][field] = { ...(bucket[name][field] || {}), ...pairs };
+          fs.writeFileSync(cfgFile, JSON.stringify(json, null, 2) + '\n');
+        }
+      } catch (e) { out = `${out}\n(Could not save env/headers: ${e.message})`.trim(); }
+    }
     this.mcpChanged = true;
     return this.showMcp(out);
+  }
+
+  mcpConfigPath(scope) {
+    return scope === 'user' || !this.cwd
+      ? path.join(os.homedir(), '.omp', 'agent', 'mcp.json')
+      : path.join(this.cwd, '.omp', 'mcp.json');
+  }
+
+  async openMcpConfig(scope) {
+    const file = this.mcpConfigPath(scope === 'user' ? 'user' : 'project');
+    if (!fs.existsSync(file)) {
+      try { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, '{\n  "mcpServers": {}\n}\n'); }
+      catch (e) { return this.post({ type: 'error', text: `Could not open ${file}: ${e.message}` }); }
+    }
+    await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: false });
   }
 
   async applyMcp() {
@@ -1580,13 +1933,144 @@ class ChatProvider {
     this.post({ type: 'notice', text: 'Agent restarted with the new MCP servers.' });
   }
 
-  // Auto-pick: up to 3 enabled skills matching the request, named to the model ahead of the message.
+  // ---- custom subagents (.omp/agents/*.md and ~/.omp/agent/agents/*.md) ----
+  async showAgents(note) {
+    await this.reveal();
+    this.post({ type: 'agentsSheet', list: listAgentFiles(this.cwd), note: note || '' });
+  }
+
+  async newAgent() {
+    const pool = this.taskModelPool();
+    const v = await this.ask({
+      title: 'New subagent',
+      text: 'Define a specialized subagent (e.g. reviewer, tester, architect). The lead can delegate tasks to it.',
+      fields: [
+        { name: 'name', label: 'Name', placeholder: 'e.g. security-reviewer', required: true },
+        { name: 'description', label: 'Description', placeholder: 'When the lead should delegate to this agent' },
+        { name: 'model', label: 'Default model (optional)', placeholder: pool[0] ? `e.g. ${pool[0]}` : 'provider/model (empty = lead decides)' },
+        { name: 'prompt', label: 'Instructions', type: 'textarea', required: true,
+          placeholder: 'You are a security reviewer. Audit changed files for injection, auth flaws, and leaked secrets…' },
+        { name: 'scope', label: 'Save for', type: 'select', value: 'project',
+          options: [{ value: 'project', label: 'This project (.omp/agents)' }, { value: 'user', label: 'All projects (~/.omp/agent/agents)' }] },
+      ],
+      submit: 'Create', cancel: 'Cancel',
+    });
+    if (!v) return this.showAgents();
+    const name = v.name.trim();
+    if (!/^[A-Za-z0-9][\w-]*$/.test(name)) return this.showAgents(`"${name}" is not a valid name: use letters, digits, - and _.`);
+    const dir = agentDirs(this.cwd).find((d) => d.scope === (v.scope === 'user' || !this.cwd ? 'all projects' : 'project')).dir;
+    const file = path.join(dir, `${name}.md`);
+    if (fs.existsSync(file)) return this.showAgents(`Agent "${name}" already exists.`);
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(file, agentFileText({ name, description: v.description, model: v.model?.trim(), prompt: v.prompt }));
+    } catch (e) { return this.showAgents(`Could not save: ${e.message}`); }
+    await this.reloadCommands();
+    return this.showAgents(`Created subagent "${name}".`);
+  }
+
+  agentFileOf(file) { return listAgentFiles(this.cwd).find((a) => a.file === file); }
+
+  async editAgent(file) {
+    if (!this.agentFileOf(file)) return;
+    await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: false });
+  }
+
+  async deleteAgent(file) {
+    const a = this.agentFileOf(file);
+    if (!a) return;
+    try { await vscode.workspace.fs.delete(vscode.Uri.file(file), { useTrash: true }); }
+    catch (e) { return this.showAgents(`Could not delete: ${e.message}`); }
+    await this.reloadCommands();
+    return this.showAgents(`Deleted subagent "${a.name}" (moved to the trash).`);
+  }
+
+  // ---- project memory manager (AGENTS.md / CLAUDE.md) ----
+  memoryFilePath() {
+    const dir = this.cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!dir) return null;
+    return ['AGENTS.md', 'CLAUDE.md'].map((f) => path.join(dir, f)).find((f) => fs.existsSync(f)) || path.join(dir, 'AGENTS.md');
+  }
+
+  async showMemory(note) {
+    await this.reveal();
+    const file = this.memoryFilePath();
+    if (!file) return this.post({ type: 'error', text: 'Open a folder first: memory is saved in its AGENTS.md.' });
+    let items = [];
+    if (fs.existsSync(file)) {
+      try {
+        const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
+        items = lines.map((line, index) => ({ index, text: line })).filter((x) => x.text.trim());
+      } catch {}
+    }
+    this.post({ type: 'memorySheet', file: path.basename(file), fullPath: file, items, note: note || '' });
+  }
+
+  async addMemoryNote(note) {
+    const text = String(note || '').trim();
+    if (!text) return this.showMemory();
+    this.remember(text);
+    return this.showMemory(`Saved: ${text}`);
+  }
+
+  async deleteMemoryLine(index) {
+    const file = this.memoryFilePath();
+    if (!file || !fs.existsSync(file)) return this.showMemory();
+    try {
+      const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
+      if (index >= 0 && index < lines.length) {
+        lines.splice(index, 1);
+        fs.writeFileSync(file, lines.join('\n'));
+      }
+    } catch (e) { return this.showMemory(`Could not update ${path.basename(file)}: ${e.message}`); }
+    return this.showMemory();
+  }
+
+  async openMemoryFile() {
+    const file = this.memoryFilePath();
+    if (!file) return;
+    if (!fs.existsSync(file)) { try { fs.writeFileSync(file, ''); } catch {} }
+    await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: false });
+  }
+
+  // ---- allowed & denied shell command rules ----
+  async showCommandRules(note) {
+    await this.reveal();
+    const cfg = vscode.workspace.getConfiguration('ompChat');
+    const allowed = Array.isArray(cfg.get('allowedCommands')) ? cfg.get('allowedCommands') : [];
+    const denied = Array.isArray(cfg.get('deniedCommands')) ? cfg.get('deniedCommands') : [];
+    this.post({ type: 'rulesSheet', allowed, denied, note: note || '' });
+  }
+
+  async addCommandRule(kind, pattern) {
+    const p = words(String(pattern || ''));
+    if (!p || !['allowed', 'denied'].includes(kind)) return this.showCommandRules();
+    const key = kind === 'denied' ? 'deniedCommands' : 'allowedCommands';
+    const cfg = vscode.workspace.getConfiguration('ompChat');
+    const cur = Array.isArray(cfg.get(key)) ? cfg.get(key) : [];
+    await cfg.update(key, [...new Set([...cur, p])], vscode.ConfigurationTarget.Global);
+    return this.showCommandRules();
+  }
+
+  async removeCommandRule(kind, pattern) {
+    if (!['allowed', 'denied'].includes(kind)) return this.showCommandRules();
+    const key = kind === 'denied' ? 'deniedCommands' : 'allowedCommands';
+    const cfg = vscode.workspace.getConfiguration('ompChat');
+    const cur = Array.isArray(cfg.get(key)) ? cfg.get(key) : [];
+    await cfg.update(key, cur.filter((x) => x !== pattern), vscode.ConfigurationTarget.Global);
+    return this.showCommandRules();
+  }
+
+  // Auto-pick: pinned skills plus up to 3 enabled skills matching the request, named to the model ahead of the message.
   async autoPick(text) {
-    if (!this.autoSkills()) return [];
+    const pinned = this.pinnedSkills();
+    if (!this.autoSkills() && !pinned.length) return [];
     let groups;
     try { groups = await this.listSkills(); } catch { return []; }
     const off = new Set(this.disabledSkills());
-    return plugins.pickRelevant(text, groups.flatMap((g) => g.skills).filter((s) => !off.has(s.name)));
+    const enabled = groups.flatMap((g) => g.skills).filter((s) => !off.has(s.name));
+    if (!this.autoSkills()) return enabled.filter((s) => pinned.includes(s.name));
+    return plugins.pickRelevant(text, enabled, 3, pinned);
   }
 
   // ---- queued messages: sent while the agent works, delivered by omp when the current turn allows ----
@@ -1597,7 +2081,7 @@ class ChatProvider {
       if (waiting.has(q.message)) continue;
       this.queued.delete(qid);
       this.post({ type: 'dequeued', qid });
-      this.post({ type: 'user', text: q.text, context: q.context, images: q.images, turn: ++this.turnSeq });
+      this.post({ type: 'user', text: q.text, context: q.context, refs: q.refs, images: q.images, turn: ++this.turnSeq });
       this.startRun(q.text);
     }
   }
@@ -1667,6 +2151,7 @@ class ChatProvider {
         if (e.created) fs.rmSync(e.path, { force: true });
         else { fs.mkdirSync(path.dirname(e.path), { recursive: true }); fs.writeFileSync(e.path, e.oldText); }
         e.reverted = true;
+        review.clear(e.path);
         done.add(vscode.workspace.asRelativePath(e.path));
       } catch (err) {
         this.post({ type: 'error', text: `Could not restore ${e.path}: ${err.message}` });
@@ -1706,16 +2191,38 @@ class ChatProvider {
     if (!next) {
       this.tried = null;
       this.quotaReason = null;
+      // Optional automatic fallback model when all keys of the current provider are spent.
+      const fallback = String(vscode.workspace.getConfiguration('ompChat').get('fallbackModel') || '').trim();
+      if (fallback && fallback !== this.modelName && this.client) {
+        this.post({ type: 'notice', text: `All keys spent on ${this.modelName}. Falling back to ${fallback} and retrying…` });
+        if (this.tab) {
+          await this.switchModel(fallback);
+        } else {
+          this.quietModel = fallback;
+          await vscode.workspace.getConfiguration('ompChat').update('model', fallback, vscode.ConfigurationTarget.Global);
+          await this.applyModelLive(fallback);
+        }
+        // Retry only once the switch took: on the old, spent model /retry would 429 straight back here, forever.
+        if (this.client && this.modelName === fallback) {
+          this.client.prompt('/retry');
+          this.busy = true;
+          this.post({ type: 'busy' });
+        }
+        return;
+      }
+      const nextStar = this.favoriteModels().find((id) => id !== this.modelName);
       const who = p ? (list.length > 1 ? `all ${list.length} saved ${keys.groupLabel(p.env)} keys` : `your ${keys.groupLabel(p.env)} key`) : 'this provider';
       if (reason.kind === 'credit') {
         this.post({ type: 'error', text: `No balance left on ${who}. Top up, or switch to a model from a provider that still has credit `
           + '(for example your OpenRouter key). Switching keeps this conversation.',
-          actions: [{ label: 'Choose another model', cmd: 'pickModel' }, ...(reason.url ? [{ label: 'Top up', cmd: 'openUrl', arg: reason.url }] : []),
+          actions: [...(nextStar ? [{ label: `Use ${nextStar.split('/').pop()}`, cmd: 'setModel', arg: nextStar }] : []),
+            { label: 'Choose another model', cmd: 'pickModel' }, ...(reason.url ? [{ label: 'Top up', cmd: 'openUrl', arg: reason.url }] : []),
             { label: 'Manage keys', cmd: 'manageKeys' }] });
       } else {
         this.post({ type: 'error', text: `The rate or usage limit is reached on ${who}. Wait for the reset, add a key, or switch to another model `
           + 'to keep going in this conversation.',
-          actions: [{ label: 'Choose another model', cmd: 'pickModel' }, { label: 'Manage keys', cmd: 'manageKeys' }, { label: 'Usage & limits', cmd: 'usage' }] });
+          actions: [...(nextStar ? [{ label: `Use ${nextStar.split('/').pop()}`, cmd: 'setModel', arg: nextStar }] : []),
+            { label: 'Choose another model', cmd: 'pickModel' }, { label: 'Manage keys', cmd: 'manageKeys' }, { label: 'Usage & limits', cmd: 'usage' }] });
       }
       return;
     }
@@ -1754,25 +2261,49 @@ class ChatProvider {
     return d?.day === utcDay() ? d : { day: utcDay(), requests: 0, free: 0 };
   }
 
+  recordCost(cost) {
+    if (!(cost > 0)) return;
+    this.sessionCost += cost;
+    const gs = this.context.globalState;
+    if (gs) {
+      let d = gs.get(USAGE_DAY);
+      if (d?.day !== utcDay()) d = { day: utcDay(), requests: 0, free: 0, cost: 0 };
+      d.cost = (d.cost || 0) + cost;
+      gs.update(USAGE_DAY, d);
+    }
+    const limit = Number(vscode.workspace.getConfiguration('ompChat').get('budgetAlert', 0));
+    if (limit > 0 && !this.budgetWarned && this.sessionCost >= limit) {
+      this.budgetWarned = true;
+      this.post({ type: 'notice', text: `This chat has reached $${this.sessionCost.toFixed(2)} (your budget alert is $${limit.toFixed(2)}).`,
+        actions: [{ label: 'Usage & limits', cmd: 'usage' }, { label: 'Choose another model', cmd: 'pickModel' }] });
+    }
+  }
+
   // Limits of the active key for the current model's provider.
   async account(force) {
-    const p = keys.providerOf(this.modelName || vscode.workspace.getConfiguration('ompChat').get('model'));
+    const p = keys.providerOf(this.effectiveModel());
     if (!p) return null;
     const provider = p.prefix.slice(0, -1);
     const k = keys.activeKey(this.context, p.env, await keys.loadKeys(this.context, p.env));
     const key = k?.key || process.env[p.env];
-    // Cache for a minute: the meter refreshes after every turn.
-    const cacheKey = `${provider}:${k?.id}`;
-    if (!force && this.accountCache?.key === cacheKey && Date.now() - this.accountCache.at < 60000) return this.accountCache.data;
-    const data = (await keys.fetchAccount(provider, key, this.installId(), k?.usageUrl)) || (key ? { provider, noApi: true } : { provider, needKey: true });
-    this.accountCache = { key: cacheKey, at: Date.now(), data };
+    // Cache for a minute (except errors, which always retry); bust immediately if key or URL changes.
+    const cacheKey = `${provider}:${k?.id || ''}:${k?.usageUrl || ''}:${k?.baseUrl || ''}`;
+    if (!force && this.accountCache?.key === cacheKey && !this.accountCache.data?.error && Date.now() - this.accountCache.at < 60000) {
+      return this.accountCache.data;
+    }
+    const data = (await keys.fetchAccount(provider, key, this.installId(), k?.usageUrl, k?.baseUrl)) || (key ? { provider, noApi: true } : { provider, needKey: true });
+    if (!data.error) this.accountCache = { key: cacheKey, at: Date.now(), data };
     return data;
   }
 
   // Compact numbers for the composer gauge: context fill, plan window or free requests today.
-  async refreshMeter() {
-    if (!this.client || !this.view) return;
-    const [state, account] = await Promise.all([this.client.request({ type: 'get_state' }).catch(() => null), this.account()]);
+  // Works even before omp finishes spawning so gateway usage URLs appear immediately on open.
+  async refreshMeter(force = false) {
+    if (!this.view) return;
+    const [state, account] = await Promise.all([
+      this.client ? this.client.request({ type: 'get_state' }).catch(() => null) : Promise.resolve(null),
+      this.account(force),
+    ]);
     // Claude Code's "context left until auto-compact": warn once as the window fills, again after it has been freed.
     const pct = state?.contextUsage?.percent;
     if (pct >= 80 && !this.ctxWarned) {
@@ -1780,7 +2311,8 @@ class ChatProvider {
       this.post({ type: 'notice', text: `The context is ${Math.round(pct)}% full. Compact the conversation to keep going: omp keeps a summary and frees the space.`,
         actions: [{ label: 'Compact now', cmd: 'compact' }] });
     } else if (pct < 50) this.ctxWarned = false;
-    this.post({ type: 'meter', context: state?.contextUsage || null, free: /:free$/.test(this.modelName || ''),
+    const model = this.effectiveModel();
+    this.post({ type: 'meter', context: state?.contextUsage || null, free: /:free$/.test(model || ''),
       today: this.today(), freeQuota: account?.free_model_daily_requests || null, windows: account?.windows || null, gauge: account?.gauge || null });
   }
 
@@ -1791,18 +2323,19 @@ class ChatProvider {
       this.account(true),
     ]);
     // Every saved key of this provider with its own limits, so the user can see which one has room.
-    const p = keys.providerOf(this.modelName);
+    const model = this.effectiveModel();
+    const p = keys.providerOf(model);
     let keyRows = [];
     if (p) {
       const list = await keys.loadKeys(this.context, p.env);
       const active = keys.activeKey(this.context, p.env, list);
       keyRows = await Promise.all(list.slice(0, 8).map(async (k) => ({
         id: k.id, env: p.env, label: k.label, mask: keys.mask(k.key), active: k.id === active?.id,
-        account: k.id === active?.id ? account : await keys.fetchAccount(p.prefix.slice(0, -1), k.key, this.installId(), k.usageUrl),
+        account: k.id === active?.id ? account : await keys.fetchAccount(p.prefix.slice(0, -1), k.key, this.installId(), k.usageUrl, k.baseUrl),
       })));
     }
     this.view?.show?.(true);
-    this.post({ type: 'usage', model: this.modelName, stats, today: this.today(), account, keys: keyRows,
+    this.post({ type: 'usage', model, stats, today: this.today(), account, keys: keyRows,
       keyGroup: p ? keys.groupLabel(p.env) : null });
     this.refreshMeter();
   }
@@ -1810,7 +2343,6 @@ class ChatProvider {
   async useKey(env, id) {
     await keys.setActive(this.context, env, id);
     await this.restart(); // keys reach omp through its environment; the conversation is resumed
-    this.showUsage();
   }
 
   // Keys sheet in the panel, or straight to the add form when nothing is saved yet.
@@ -1859,7 +2391,7 @@ class ChatProvider {
     const e = this.edits.get(id);
     if (!e) return;
     const name = path.basename(e.path);
-    const left = vscode.Uri.from({ scheme: ORIG_SCHEME, path: '/' + name, query: id });
+    const left = vscode.Uri.from({ scheme: ORIG_SCHEME, path: '/' + name, query: `${this.id}:${id}` });
     vscode.commands.executeCommand('vscode.diff', left, vscode.Uri.file(e.path), `${name} (before ↔ after omp edit)`);
   }
 
@@ -1880,6 +2412,7 @@ class ChatProvider {
       return this.post({ type: 'error', text: `Undo failed: ${err.message}` });
     }
     e.reverted = true; // Rewind must not undo it a second time
+    review.clear(e.path);
     this.notes.push(`[Note: the user reverted your change to ${rel}; it is back to its previous content.]`);
     this.post({ type: 'reverted', id });
   }
@@ -1915,8 +2448,8 @@ class ChatProvider {
     this.postContext();
   }
 
-  // "@problems", "@terminal", "@git" and "@https://…" in a message: what they point at, sent along (not shown in
-  // your bubble). "@file" and "@folder/" are omp's: it reads the file or lists the folder itself.
+  // "@problems", "@terminal", "@git", "@git:log", "@open" and "@https://…" in a message: what they point at, sent along
+  // (not shown in your bubble). "@file" and "@folder/" are omp's: it reads the file or lists the folder itself.
   async mentions(text) {
     const blocks = [];
     if (/(^|\s)@problems\b/.test(text)) {
@@ -1927,10 +2460,39 @@ class ChatProvider {
       const out = await this.terminalText();
       blocks.push(fence(`Terminal output${out ? `: ${vscode.window.activeTerminal.name}` : ''}`, out || 'No terminal is open.'));
     }
-    if (/(^|\s)@git\b/.test(text)) blocks.push(await this.gitChanges());
+    if (/(^|\s)@git:log\b/.test(text)) blocks.push(await this.gitLog());
+    if (/(^|\s)@git(?:\b(?!:))/.test(text)) blocks.push(await this.gitChanges());
+    if (/(^|\s)@open\b/.test(text)) blocks.push(this.openEditorsContext());
     const urls = [...new Set([...text.matchAll(/(?:^|\s)@(https?:\/\/[^\s<>"']+)/g)].map((m) => m[1].replace(/[),.;:!?\]]+$/, '')))];
     for (const url of urls.slice(0, 3)) blocks.push(await fetchPage(url));
     return blocks;
+  }
+
+  async gitLog() {
+    const cwd = this.cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    try {
+      const log = await git(['log', '-n', '15', '--stat', '--oneline'], cwd);
+      return fence('Git log (recent commits)', log ? log.slice(0, 20000) : 'No commits yet.');
+    } catch (e) {
+      return fence('Git log (recent commits)', `git failed: ${e.message}`);
+    }
+  }
+
+  openEditorsContext() {
+    const uris = [];
+    for (const g of vscode.window.tabGroups?.all || []) {
+      for (const tab of g.tabs || []) {
+        const u = tab.input?.uri;
+        if (u?.scheme === 'file') uris.push(vscode.workspace.asRelativePath(u).replace(/\\/g, '/'));
+      }
+    }
+    if (!uris.length) {
+      for (const ed of vscode.window.visibleTextEditors || []) {
+        if (ed.document.uri.scheme === 'file') uris.push(vscode.workspace.asRelativePath(ed.document.uri).replace(/\\/g, '/'));
+      }
+    }
+    const list = [...new Set(uris)];
+    return fence('Open editors', list.length ? list.map((p) => `- ${p}`).join('\n') : 'No open files.');
   }
 
   // "@git": what you have not committed yet, as git status plus the diff against HEAD.
@@ -1948,11 +2510,15 @@ class ChatProvider {
     }
   }
 
-  // The active terminal's recent output. VS Code has no API to read a terminal, so this copies it.
-  // ponytail: select-all + copy through the clipboard (restored afterwards); shell-integration reads if this proves flaky.
+  // The active terminal's recent output: prefers VS Code Terminal Shell Integration buffer (no clipboard side effects),
+  // falling back to selectAll + copySelection when shell integration is unavailable.
   async terminalText(maxLines = 200) {
     const t = vscode.window.activeTerminal;
     if (!t) return null;
+    const buffered = terminalBuffers.get(t);
+    if (buffered && buffered.trim()) {
+      return buffered.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').replace(/\s+$/, '').split(/\r?\n/).slice(-maxLines).join('\n').slice(-12000);
+    }
     const saved = await vscode.env.clipboard.readText();
     const marker = `\u0000omp-${Date.now()}`;
     await vscode.env.clipboard.writeText(marker);
@@ -1996,8 +2562,31 @@ class ChatProvider {
     await vscode.window.showTextDocument(doc, { preview: false });
   }
 
-  // Workspace files for the "@" picker in the panel.
+  // Inline Edit (Ctrl+I): quick input right in the editor to edit the current selection/file with inline diff review.
+  async inlineEdit() {
+    const ed = vscode.window.activeTextEditor;
+    if (!ed || ed.document.uri.scheme !== 'file') return vscode.window.showInformationMessage(this.t('Open a file first to use Inline Edit.'));
+    const rel = vscode.workspace.asRelativePath(ed.document.uri).replace(/\\/g, '/');
+    const sel = ed.selection;
+    const target = sel.isEmpty ? rel : `${rel}:${sel.start.line + 1}-${sel.end.line + 1}`;
+    const instruction = await vscode.window.showInputBox({
+      title: `${this.t('Inline Edit')} · ${target}`,
+      prompt: this.t('Describe the edit to make (changes open for inline Accept/Reject)'),
+      placeHolder: this.t('e.g. extract helper function, add error handling, convert to async/await…'),
+    });
+    if (!instruction?.trim()) return;
+    await this.reveal();
+    const prompt = sel.isEmpty
+      ? `Edit ${rel} directly using the edit tool: ${instruction.trim()}`
+      : `Edit only the selected region (${target}) in ${rel} directly using the edit tool: ${instruction.trim()}`;
+    return this.send(prompt, true);
+  }
+
+  // Workspace files for the "@" picker in the panel (uses worktree cwd when inside a git worktree chat).
   async listFiles() {
+    if (this.worktree?.cwd) {
+      return this.post({ type: 'files', list: walkWorktreeFiles(this.worktree.cwd, 5000) });
+    }
     const files = await vscode.workspace.findFiles('**/*', '**/{node_modules,.git,dist,out,build}/**', 5000);
     this.post({ type: 'files', list: files.map((f) => vscode.workspace.asRelativePath(f).replace(/\\/g, '/')).sort() });
   }
@@ -2042,11 +2631,37 @@ class ChatProvider {
     return list;
   }
 
+  // Apply a model change inside the running omp process without losing the conversation.
+  async applyModelLive(id) {
+    if (!this.client) return;
+    id = String(id || '');
+    const slash = id.indexOf('/');
+    const p = keys.providerOf(id);
+    const hasKey = !!p && ((await keys.loadKeys(this.context, p.env)).length > 0 || !!process.env[p.env] || !!p.optionalKey);
+    try {
+      this.setModel(await this.client.request({ type: 'set_model', provider: id.slice(0, slash), modelId: id.slice(slash + 1) }));
+    } catch (err) {
+      if (p && hasKey) return this.restart(); // key added since: respawn on the new model, same conversation
+      if (p) {
+        return this.post({ type: 'notice', text: `${id} needs a ${p.label} key. Add one and the conversation continues on this model.`,
+          actions: [{ label: `Add ${p.label} key`, cmd: 'manageKeys' }, { label: 'Choose another model', cmd: 'pickModel' }] });
+      }
+      return this.post({ type: 'error', text: `Could not switch to ${id}: ${err.message}` });
+    }
+    this.accountCache = null;
+    this.refreshMeter(true);
+  }
+
   async onConfigChange(e) {
     if (!e.affectsConfiguration('ompChat')) return;
     const cfg = vscode.workspace.getConfiguration('ompChat');
-    this.post({ type: 'mode', mode: cfg.get('approvalMode') });
-    if (RESTART_KEYS.some((k) => e.affectsConfiguration('ompChat.' + k))) return this.restart();
+    if (!this.modeOverride) this.post({ type: 'mode', mode: cfg.get('approvalMode') });
+    const restartNeeded = RESTART_KEYS.some((k) => {
+      if (!e.affectsConfiguration('ompChat.' + k)) return false;
+      if (k === 'approvalMode' && this.modeOverride) return false; // tab has its own mode override
+      return true;
+    });
+    if (restartNeeded) return this.restart();
     if (e.affectsConfiguration('ompChat.thinkingLevel')) {
       const level = thinkingLevel(cfg);
       this.post({ type: 'thinking_level', level });
@@ -2057,25 +2672,8 @@ class ChatProvider {
       return;
     }
     if (e.affectsConfiguration('ompChat.model') && this.quietModel === cfg.get('model')) { this.quietModel = null; return; } // addKeyForm restarts
-    if (e.affectsConfiguration('ompChat.model') && this.client) {
-      const id = String(cfg.get('model'));
-      const slash = id.indexOf('/');
-      // set_model swaps the model inside the running omp, so the conversation carries on unchanged.
-      const p = keys.providerOf(id);
-      const hasKey = !!p && ((await keys.loadKeys(this.context, p.env)).length > 0 || !!process.env[p.env]);
-      try {
-        this.setModel(await this.client.request({ type: 'set_model', provider: id.slice(0, slash), modelId: id.slice(slash + 1) }));
-      } catch (err) {
-        // omp only lists models of providers that had a key when it started.
-        if (p && hasKey) return this.restart(); // key added since: respawn on the new model, same conversation
-        if (p) {
-          return this.post({ type: 'notice', text: `${id} needs a ${p.label} key. Add one and the conversation continues on this model.`,
-            actions: [{ label: `Add ${p.label} key`, cmd: 'manageKeys' }, { label: 'Choose another model', cmd: 'pickModel' }] });
-        }
-        return this.post({ type: 'error', text: `Could not switch to ${id}: ${err.message}` });
-      }
-      this.accountCache = null;
-      this.refreshMeter();
+    if (e.affectsConfiguration('ompChat.model') && !this.modelOverride && this.client) {
+      return this.applyModelLive(cfg.get('model'));
     }
   }
 
@@ -2104,8 +2702,18 @@ class ChatProvider {
       this.post({ type: 'notice', text: `Plan mode: blocked ${r.title.split('\n')[0].replace(/^Allow tool:\s*/, '')}. Approve the plan to let the agent make changes.` });
       return;
     }
-    // A command on your allowed list runs without a card; otherwise the card offers to add it to the list.
+    // Denied commands are blocked immediately across all modes (safety net).
     const bash = r.method === 'select' && BASH_ASK.exec(r.title || '');
+    if (bash) {
+      const denied = deniedPattern(bash[1], vscode.workspace.getConfiguration('ompChat').get('deniedCommands', []));
+      if (denied) {
+        const deny = r.options.find((o) => /^deny/i.test(o)) || r.options[r.options.length - 1];
+        this.client?.send({ type: 'extension_ui_response', id: r.id, value: deny });
+        this.post({ type: 'notice', text: `Blocked by deniedCommands rule (${denied}): ${bash[1]}` });
+        return;
+      }
+    }
+    // A command on your allowed list runs without a card; otherwise the card offers to add it to the list.
     const once = bash && r.options?.find((o) => /^approve( once)?$/i.test(o));
     let always;
     if (once && !SHELL_CONTROL.test(bash[1])) {
@@ -2119,6 +2727,17 @@ class ChatProvider {
       always = { label: `Always allow ${pattern}`, pattern };
       const at = r.options.indexOf(once) + 1;
       r = { ...r, options: [...r.options.slice(0, at), always.label, ...r.options.slice(at)] };
+    }
+    // For `Allow tool: write`, compute an exact diff against the existing file on disk (instead of showing every line as "+").
+    let writeDiff = null;
+    if (r.method === 'select' && /^Allow tool: write\b/.test(r.title || '')) {
+      // The write this card asks about, by its `Path:` line; with several writes in flight, never another file's diff.
+      const asked = /^Path: (.+)$/m.exec([r.title, r.message].filter(Boolean).join('\n'))?.[1];
+      const matches = [...this.toolStarts.values()].filter((w) => w.args?.path === asked);
+      const latestWrite = matches.length === 1 ? matches[0] : null;
+      if (latestWrite && typeof latestWrite.before === 'string' && typeof latestWrite.args?.content === 'string') {
+        writeDiff = review.formatDiff(latestWrite.before, latestWrite.args.content).slice(0, 20000);
+      }
     }
     const client = this.client;
     let cancelled = false;
@@ -2134,7 +2753,7 @@ class ChatProvider {
           answer: resolve,
           cancel: () => { cancelled = true; this.post({ type: 'dialog_close', id: r.id }); resolve(undefined); },
         });
-        this.post({ type: 'dialog', id: r.id, title: [r.title, r.message].filter(Boolean).join('\n'), options, input });
+        this.post({ type: 'dialog', id: r.id, title: [r.title, r.message].filter(Boolean).join('\n'), options, input, ...(writeDiff ? { diff: writeDiff } : {}) });
       });
       this.dialogs.delete(r.id);
       this.refreshStatus();
@@ -2223,6 +2842,15 @@ class ChatProvider {
     const ctx = withContext && !isCommand ? this.contextInfo() : null;
     const pinned = isCommand ? [] : this.pinned.filter((rel) => rel !== ctx?.rel);
     const blocks = isCommand ? [] : [...extra, ...await this.mentions(text)];
+    // The active file has unsaved edits in VS Code: a diff against disk so omp doesn't see stale content. With the
+    // other fenced blocks, after the attachment headers: splitUserText reads those headers first.
+    const ed = ctx && !ctx.text && vscode.window.activeTextEditor;
+    if (ed?.document?.isDirty && ed.document.uri.scheme === 'file') {
+      try {
+        const d = review.formatDiff(fs.readFileSync(ed.document.uri.fsPath, 'utf8'), ed.document.getText());
+        if (d) blocks.unshift(fence(`Unsaved changes in ${ctx.rel}`, d.slice(0, 15000)));
+      } catch {}
+    }
     let message = [...blocks, text].join('\n\n');
     if (pinned.length) message = `[Attached files: ${pinned.join(', ')}]\n\n${message}`;
     if (attachments.length && !isCommand) {
@@ -2242,7 +2870,9 @@ class ChatProvider {
       message = `${this.notes.join('\n')}\n\n${message}`;
       this.notes = [];
     }
-    const shown = { text, context: [ctx?.label, ...pinned, ...attachments.map((a) => a.label)].filter(Boolean).map(shortLabel),
+    // Chips show a short label and open their ref: the selection's `file:10-20`, a pinned path, an attachment's full path.
+    const chips = [ctx?.label, ...pinned, ...attachments].filter(Boolean);
+    const shown = { text, context: chips.map((c) => shortLabel(c.label ?? c)), refs: chips.map((c) => c.path ?? c),
       images: images.map((i) => `data:${i.mimeType};base64,${i.data}`) };
     // The awaits above (skill list, terminal copy) can outlast a restart: send to the omp running now.
     client = this.client || await this.ensureClient();
@@ -2273,15 +2903,56 @@ class ChatProvider {
   // output in the conversation, so the agent sees it with your next message.
   async runShell(command) {
     const id = 'sh' + ++this.shellSeq;
+    this.activeShellId = id;
     this.post({ type: 'shell_start', id, command });
     this.shellRunning = (this.shellRunning || 0) + 1;
     try {
-      const r = await this.client.request({ type: 'bash', command });
+      const r = await this.client.request({ type: 'bash', command }, 0);
       this.post({ type: 'shell_end', id, output: (r.output || '').slice(-8000), exitCode: r.exitCode, cancelled: r.cancelled, truncated: r.truncated, timedOut: r.timedOut });
     } catch (e) {
       this.post({ type: 'shell_end', id, output: e.message, exitCode: -1 });
     } finally {
+      if (this.activeShellId === id) this.activeShellId = null;
       this.shellRunning--;
+    }
+  }
+
+  // Worktree actions right from the tab bar: view diff against base, merge branch into main repo, or discard worktree.
+  async worktreeAction(kind) {
+    const wt = this.worktree;
+    if (!wt) return;
+    if (kind === 'diff') {
+      try {
+        const diff = await git(['diff', `${wt.base}...${wt.branch}`], wt.path).catch(() => '') || await git(['diff', 'HEAD'], wt.path);
+        const doc = await vscode.workspace.openTextDocument({ content: diff || '# No changes in this worktree yet.\n', language: 'diff' });
+        await vscode.window.showTextDocument(doc, { preview: false });
+      } catch (e) {
+        this.post({ type: 'error', text: `Could not read worktree diff: ${e.message}` });
+      }
+    } else if (kind === 'merge') {
+      try {
+        const dirty = await git(['status', '--porcelain'], wt.path);
+        if (dirty) {
+          return this.post({ type: 'notice', text: `Worktree ${wt.branch} has uncommitted changes. Commit them first (e.g. !git add -A && git commit -m "…") before merging.` });
+        }
+        await git(['merge', '--no-ff', wt.branch], wt.top);
+        this.post({ type: 'notice', text: `Merged branch ${wt.branch} into the main repository.` });
+      } catch (e) {
+        this.post({ type: 'error', text: `Merge failed: ${e.message}` });
+      }
+    } else if (kind === 'discard') {
+      const yes = this.t('Discard');
+      const pick = await vscode.window.showWarningMessage(this.t('Discard this worktree and delete its branch?'), { modal: true, detail: `${wt.branch}\n${wt.path}` }, yes);
+      if (pick !== yes) return;
+      this.client?.dispose();
+      this.client = null;
+      try {
+        await removeWorktree(wt, true);
+        this.worktree = null; // only now: on failure the tab keeps working in the worktree, never the main checkout
+        this.panel?.dispose();
+      } catch (e) {
+        this.post({ type: 'error', text: `Could not discard worktree: ${e.message}` });
+      }
     }
   }
 
@@ -2346,6 +3017,9 @@ class ChatProvider {
   }
 
   dispose() {
+    clearInterval(this.meterTimer);
+    this.meterTimer = null;
+    this.reviewSub?.dispose();
     this.map?.dispose();
     if (this.client) this.client.dispose();
   }
@@ -2363,7 +3037,17 @@ class ChatProvider {
 <link rel="stylesheet" href="${uri('main.css')}">
 </head><body>
 <template id="mascot">${mascot}</template>
+<div id="wtBar" hidden></div>
+<div id="searchBar" hidden>
+  <span class="codicon codicon-search"></span>
+  <input id="searchInput" type="text" placeholder="Search in conversation…">
+  <span id="searchCount"></span>
+  <button id="searchPrev" class="icon" title="Previous match"><span class="codicon codicon-arrow-up"></span></button>
+  <button id="searchNext" class="icon" title="Next match"><span class="codicon codicon-arrow-down"></span></button>
+  <button id="searchClose" class="icon" title="Close"><span class="codicon codicon-close"></span></button>
+</div>
 <div id="sheet" hidden></div>
+<div id="lightbox" hidden><img id="lightboxImg" alt=""></div>
 <div id="log" role="log" aria-live="polite">
   <div id="welcome">
     <div class="hero">${mascot}</div>
@@ -2385,6 +3069,7 @@ class ChatProvider {
 <div id="composer">
   <button id="jump" class="icon" hidden title="Jump to latest" aria-label="Jump to latest"><span class="codicon codicon-arrow-down"></span></button>
   <div id="popup" hidden></div>
+  <div id="reviewBar" hidden></div>
   <div id="agents" hidden></div>
   <div id="todos" hidden></div>
   <div id="queue" hidden></div>
@@ -2418,6 +3103,7 @@ class ChatProvider {
 <script nonce="${nonce}" type="application/json" id="l10n">${JSON.stringify(this.dictionary).replace(/</g, '\\u003c')}</script>
 <script nonce="${nonce}" src="${uri('l10n.js')}"></script>
 <script nonce="${nonce}" src="${uri('vendor/markdown-it.min.js')}"></script>
+<script nonce="${nonce}" src="${uri('highlight.js')}"></script>
 <script nonce="${nonce}" src="${uri('main.js')}"></script>
 </body></html>`;
   }
@@ -2464,14 +3150,14 @@ function openTab(context, { panel, resume, worktree } = {}) {
 }
 
 // A new branch checked out next to the repository (<repo>.worktrees/<branch>), so this chat's edits never touch yours.
-async function newWorktreeChat(context) {
+async function newWorktreeChat(context, translate = (s) => s) {
   const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   let top;
   try { top = root && await git(['rev-parse', '--show-toplevel'], root); } catch {}
-  if (!top) return vscode.window.showErrorMessage('OMP Chat: a worktree chat needs a folder that is a git repository.');
+  if (!top) return vscode.window.showErrorMessage(translate('OMP Chat: a worktree chat needs a folder that is a git repository.'));
   const stamp = new Date().toISOString().slice(0, 16).replace(/\D/g, '');
-  const branch = await vscode.window.showInputBox({ title: 'New chat in a git worktree', prompt: 'Branch for this chat (created from the current commit)',
-    value: `omp/chat-${stamp}`, validateInput: (v) => (/^[\w][\w./-]*$/.test(v) && !/\.\.|\/$|\.lock$/.test(v) ? null : 'Letters, digits and / . _ - only') });
+  const branch = await vscode.window.showInputBox({ title: translate('New chat in a git worktree'), prompt: translate('Branch for this chat (created from the current commit)'),
+    value: `omp/chat-${stamp}`, validateInput: (v) => (/^[\w][\w./-]*$/.test(v) && !/\.\.|\/$|\.lock$/.test(v) ? null : translate('Letters, digits and / . _ - only')) });
   if (!branch) return;
   const dir = path.join(path.dirname(top), `${path.basename(top)}.worktrees`, branch.replace(/\//g, '-'));
   try {
@@ -2480,29 +3166,84 @@ async function newWorktreeChat(context) {
     // the same subfolder of the repository that is open in VS Code
     openTab(context, { worktree: { top, branch, base, path: dir, cwd: path.join(dir, path.relative(top, root)) } });
   } catch (e) {
-    vscode.window.showErrorMessage(`OMP Chat: could not create the worktree: ${e.message}`);
+    vscode.window.showErrorMessage(`${translate('OMP Chat: could not create the worktree')}: ${e.message}`);
   }
+}
+
+// The worktree and its branch. omp may still hold the folder for a moment after it is stopped (Windows): retry.
+async function removeWorktree(wt, force) {
+  for (let i = 0; ; i++) {
+    try { await git(['worktree', 'remove', ...(force ? ['--force'] : []), wt.path], wt.top); break; }
+    catch (e) { if (i >= 3) throw e; await new Promise((r) => setTimeout(r, 1000)); }
+  }
+  await git(['branch', '-D', wt.branch], wt.top);
 }
 
 // Closing the tab: a worktree with nothing in it (no changes, no new commits) is removed with its branch; one with
 // work in it is kept for you to review and merge.
-async function closeWorktree(wt) {
+async function closeWorktree(wt, translate = (s) => s) {
   try {
     const dirty = await git(['status', '--porcelain'], wt.path);
     const ahead = await git(['rev-list', '--count', `${wt.base}..${wt.branch}`], wt.top);
     if (!dirty && ahead === '0') {
-      for (let i = 0; ; i++) { // omp may still hold the folder for a moment after it is stopped (Windows)
-        try { await git(['worktree', 'remove', wt.path], wt.top); break; }
-        catch (e) { if (i >= 3) throw e; await new Promise((r) => setTimeout(r, 1000)); }
-      }
-      await git(['branch', '-D', wt.branch], wt.top);
+      await removeWorktree(wt);
       return;
     }
   } catch { /* fall through: keep it */ }
-  const open = 'Open in New Window';
+  const open = translate('Open Folder in New Window');
+  const merge = translate('Merge branch');
   const pick = await vscode.window.showInformationMessage(`OMP Chat: the worktree for branch ${wt.branch} has changes, so it was kept at ${wt.path}. `
-    + `Merge the branch when you are happy with it, then remove it with "git worktree remove".`, open);
+    + `Merge the branch when you are happy with it, then remove it with "git worktree remove".`, open, merge);
   if (pick === open) vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(wt.path), true);
+  else if (pick === merge) {
+    try { await git(['merge', '--no-ff', wt.branch], wt.top); vscode.window.showInformationMessage(`Merged ${wt.branch}.`); }
+    catch (e) { vscode.window.showErrorMessage(`Merge failed: ${e.message}`); }
+  }
+}
+
+// Generate a concise git commit message from staged (or unstaged) changes and fill VS Code's Git SCM input box.
+async function generateCommitMessage(context, provider) {
+  const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!cwd) return vscode.window.showErrorMessage(provider.t('Open a folder first.'));
+  let diff = '';
+  try {
+    diff = await git(['diff', '--cached'], cwd);
+    if (!diff) diff = await git(['diff'], cwd);
+  } catch (e) {
+    return vscode.window.showErrorMessage(`git failed: ${e.message}`);
+  }
+  if (!diff.trim()) return vscode.window.showInformationMessage(provider.t('No changes to generate a commit message for.'));
+  const ompPath = vscode.workspace.getConfiguration('ompChat').get('ompPath') || 'omp';
+  const fallback = ompPath === 'omp' ? (provider.ompFallback || findOmp()) : null;
+  const command = fallback ? fallback.omp : ompPath;
+  const env = { ...process.env, ...(await keys.envFor(context)) };
+  if (fallback) {
+    const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') || 'PATH';
+    env[key] = [...fallback.pathDirs, env[key]].filter(Boolean).join(path.delimiter);
+  }
+  const baseUrls = await keys.baseUrlsFor(context);
+  const model = provider.effectiveModel();
+  const prompt = 'Write a concise conventional commit message (1 subject line <= 72 chars, optional short bullet body) for the git diff below. Output ONLY the commit message with no markdown fences or commentary.\n\n'
+    + diff.slice(0, 16000);
+  await vscode.window.withProgress({ location: vscode.ProgressLocation?.SourceControl || 1, title: provider.t('Generating commit message…') }, async () => {
+    try {
+      const args = ['--print', '--no-session', '--model', model, ...provider.baseUrlArgs(baseUrls), prompt];
+      const msg = await new Promise((resolve, reject) => {
+        require('child_process').execFile(command, args, { cwd, env, timeout: 60000, maxBuffer: 4e6 },
+          (err, stdout, stderr) => (err ? reject(new Error(String(stderr || err.message).trim())) : resolve(String(stdout).trim())));
+      });
+      const clean = msg.replace(/^```[^\n]*\n?|\n?```$/g, '').trim();
+      const gitExt = vscode.extensions?.getExtension?.('vscode.git')?.exports;
+      const repo = gitExt?.getAPI?.(1)?.repositories?.[0];
+      if (repo) repo.inputBox.value = clean;
+      else {
+        await vscode.env.clipboard.writeText(clean);
+        vscode.window.showInformationMessage(provider.t('Commit message copied to clipboard: ') + clean.split('\n')[0]);
+      }
+    } catch (e) {
+      vscode.window.showErrorMessage(`${provider.t('Could not generate commit message')}: ${e.message}`);
+    }
+  });
 }
 
 function activate(context) {
@@ -2510,6 +3251,20 @@ function activate(context) {
   chats.add(provider);
   // The chat a palette command means: the tab you are in, otherwise the sidebar's.
   const current = () => [...chats].find((c) => c.panel?.active) || provider;
+  // Shared orig-file content provider across ALL chats (sidebar + tabs + worktrees).
+  const origProvider = {
+    provideTextDocumentContent(uri) {
+      const q = String(uri.query || '');
+      const sep = q.indexOf(':');
+      if (sep > 0) {
+        const cid = q.slice(0, sep), eid = q.slice(sep + 1);
+        const owner = [...chats].find((c) => c.id === cid);
+        if (owner?.edits.has(eid)) return owner.edits.get(eid).oldText ?? '';
+      }
+      for (const c of chats) if (c.edits.has(q)) return c.edits.get(q).oldText ?? '';
+      return '';
+    },
+  };
   // Agent status in the status bar, visible even with the panel closed; click opens the chat that needs you.
   statusItem = vscode.window.createStatusBarItem?.(vscode.StatusBarAlignment?.Left, 100);
   if (statusItem) {
@@ -2528,11 +3283,11 @@ function activate(context) {
         openTab(context, { panel, resume: state?.session?.file, worktree: state?.session?.worktree });
       },
     }) || { dispose() {} },
-    vscode.workspace.registerTextDocumentContentProvider(ORIG_SCHEME, provider),
+    vscode.workspace.registerTextDocumentContentProvider(ORIG_SCHEME, origProvider),
     vscode.commands.registerCommand('ompChat.focus', () =>
       vscode.commands.executeCommand('ompChat.view.focus')),
     vscode.commands.registerCommand('ompChat.newTab', () => openTab(context)),
-    vscode.commands.registerCommand('ompChat.newWorktreeChat', () => newWorktreeChat(context)),
+    vscode.commands.registerCommand('ompChat.newWorktreeChat', () => newWorktreeChat(context, (s) => provider.t(s))),
     vscode.commands.registerCommand('ompChat.attention', () => { // the one waiting for you first, then one that finished
       const top = byStatus()[0];
       return (top && top.s !== 'idle' ? top.c : current()).reveal();
@@ -2558,11 +3313,24 @@ function activate(context) {
     vscode.commands.registerCommand('ompChat.subagentMap', () => current().openMap()),
     vscode.commands.registerCommand('ompChat.exportChat', () => current().exportChat()),
     vscode.commands.registerCommand('ompChat.commands', () => current().showCommands()),
+    vscode.commands.registerCommand('ompChat.agents', () => current().showAgents()),
+    vscode.commands.registerCommand('ompChat.memory', () => current().showMemory()),
+    vscode.commands.registerCommand('ompChat.commandRules', () => current().showCommandRules()),
     vscode.commands.registerCommand('ompChat.mcp', () => current().showMcp()),
-    vscode.commands.registerCommand('ompChat.addFile', (uri, all) => (Array.isArray(all) && all.length ? all : [uri || vscode.window.activeTextEditor?.document.uri]).forEach((u) => provider.pinFile(u)) || provider.reveal()),
-    vscode.commands.registerCommand('ompChat.ask', () => provider.editorAction('ask')),
-    vscode.commands.registerCommand('ompChat.explain', () => provider.editorAction('explain')),
-    vscode.commands.registerCommand('ompChat.fix', (uri, range) => provider.editorAction('fix', uri, range)),
+    vscode.commands.registerCommand('ompChat.inlineEdit', () => current().inlineEdit()),
+    vscode.commands.registerCommand('ompChat.generateCommit', () => generateCommitMessage(context, current())),
+    vscode.commands.registerCommand('ompChat.clearAttachments', () => {
+      const n = provider.pruneAttachments(true);
+      vscode.window.showInformationMessage(n ? `${provider.t('Cleared cached attachments')} (${n}).` : provider.t('No cached attachments to clear.'));
+    }),
+    vscode.commands.registerCommand('ompChat.addFile', (uri, all) => {
+      const target = current();
+      (Array.isArray(all) && all.length ? all : [uri || vscode.window.activeTextEditor?.document.uri]).forEach((u) => target.pinFile(u));
+      return target.reveal();
+    }),
+    vscode.commands.registerCommand('ompChat.ask', () => current().editorAction('ask')),
+    vscode.commands.registerCommand('ompChat.explain', () => current().editorAction('explain')),
+    vscode.commands.registerCommand('ompChat.fix', (uri, range) => current().editorAction('fix', uri, range)),
     vscode.languages.registerCodeActionsProvider({ scheme: 'file' }, {
       provideCodeActions(doc, range, ctx) {
         if (!ctx.diagnostics.some((d) => d.severity <= 1)) return [];
@@ -2575,10 +3343,14 @@ function activate(context) {
     vscode.workspace.onDidChangeConfiguration((e) => chats.forEach((c) => c.onConfigChange(e))),
     vscode.window.onDidChangeActiveTextEditor(() => chats.forEach((c) => c.postContext())),
     vscode.window.onDidChangeTextEditorSelection(() => chats.forEach((c) => c.postContext())),
+    vscode.window.onDidChangeWindowState?.((s) => { if (s.focused) chats.forEach((c) => { if (c.view?.visible) c.refreshMeter(); }); }) || { dispose() {} },
+    vscode.window.onDidStartTerminalShellExecution?.((e) => {
+      if (e.terminal && e.execution?.read) captureTerminalExecution(e.terminal, e.execution.read(), e.execution.commandLine?.value);
+    }) || { dispose() {} },
     { dispose: () => chats.forEach((c) => c.dispose()) },
   );
 }
 
 function deactivate() {}
 
-module.exports = { activate, deactivate, _test: { chats, openTab, closeWorktree, newWorktreeChat, parseFileRef, titleHeader, toMarkdown, splitUserText, problemLines, listCommandFiles, commandFileText, parseMcpList } };
+module.exports = { activate, deactivate, _test: { chats, openTab, closeWorktree, newWorktreeChat, parseFileRef, titleHeader, toMarkdown, splitUserText, problemLines, listCommandFiles, commandFileText, listAgentFiles, agentFileText, parseMcpList, deniedPattern, walkWorktreeFiles } };

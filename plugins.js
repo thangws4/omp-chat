@@ -29,32 +29,42 @@ function groupSkills(skills, cwd) {
 // ponytail: keyword overlap, not semantics. Skill descriptions are English, so common Vietnamese intents
 // are mapped to English words first. Upgrade path: ask the model to choose (costs one request per message).
 const VI = [
-  [/sửa lỗi|gỡ lỗi|lỗi|bug|crash/i, 'debug debugging bug fix error failure'],
+  [/sửa lỗi|gỡ lỗi|lỗi|bug|crash|hỏng|không chạy/i, 'debug debugging bug fix error failure'],
   [/kiểm thử|unit test|viết test|\btest/i, 'test testing tdd tests'],
   [/đặc tả|\bspec\b|yêu cầu/i, 'spec specification requirements'],
   [/kế hoạch|lập kế hoạch|\bplan\b|chia nhỏ/i, 'plan planning tasks breakdown'],
-  [/đánh giá|review|xem lại/i, 'review code quality'],
+  [/đánh giá|review|xem lại|kiểm tra code/i, 'review code quality'],
   [/tài liệu|readme|\bdocs?\b|adr/i, 'documentation docs'],
-  [/giao diện|\bui\b|frontend|css/i, 'frontend interface components'],
+  [/giao diện|\bui\b|frontend|css|html|màn hình|thiết kế web/i, 'frontend interface components design'],
   [/hiệu năng|tối ưu|chậm|performance/i, 'performance optimization'],
-  [/bảo mật|security|lỗ hổng/i, 'security hardening'],
-  [/đơn giản|gọn|refactor|dọn/i, 'simplify simplification refactor'],
-  [/ý tưởng|brainstorm|thiết kế/i, 'brainstorming idea design'],
-  [/triển khai|deploy|phát hành|release|ship/i, 'ship shipping launch release deploy'],
-  [/\bgit\b|commit|nhánh|branch|pull request|\bpr\b/i, 'git branch commit workflow'],
-  [/api|endpoint|giao tiếp/i, 'api interface design'],
+  [/bảo mật|security|lỗ hổng|xác thực|auth/i, 'security hardening authentication'],
+  [/đơn giản|gọn|refactor|dọn|tái cấu trúc/i, 'simplify simplification refactor'],
+  [/ý tưởng|brainstorm|thiết kế|kiến trúc/i, 'brainstorming idea design architecture'],
+  [/triển khai|deploy|phát hành|release|ship|đóng gói/i, 'ship shipping launch release deploy'],
+  [/\bgit\b|commit|nhánh|branch|pull request|\bpr\b|merge/i, 'git branch commit workflow'],
+  [/api|endpoint|giao tiếp|rest|graphql/i, 'api interface design'],
+  [/cơ sở dữ liệu|database|\bsql\b|migration|schema/i, 'database sql migration schema'],
+  [/cải thiện|nâng cấp|thêm chức năng|tính năng mới/i, 'feature enhancement brainstorm plan'],
 ];
 const STOP = new Set(('the and for with that this from into when use using your you are not but can any all its was what how have has will '
   + 'about them they then than over just more most also only some such like before after each make made does need want work works').split(' '));
-const words = (t) => (String(t).toLowerCase().match(/[a-z][a-z0-9]{2,}/g) || []).filter((w) => !STOP.has(w));
+// Light English stemmer so "testing"/"tested"/"tests" all match "test", "debugging" matches "debug", etc.
+const stem = (w) => w.replace(/(?:ing|tion|ment|ness|able|ible|ies|ied|ed|es|s)$/, (m) => (w.length - m.length >= 3 ? (m === 'ies' || m === 'ied' ? 'y' : '') : m));
+const words = (t) => (String(t).toLowerCase().match(/[a-z][a-z0-9]{2,}/g) || []).filter((w) => !STOP.has(w)).flatMap((w) => {
+  const s = stem(w);
+  return s && s !== w ? [w, s] : [w];
+});
 
 // Up to `max` skills whose name (strong) or description (weak) shares words with the request.
-function pickRelevant(message, skills, max = 3) {
+// `pinned` skill names are always included ahead of auto-picked ones.
+function pickRelevant(message, skills, max = 3, pinned = []) {
+  const pinSet = new Set(pinned || []);
+  const pinnedList = skills.filter((s) => pinSet.has(s.name));
   let q = String(message || '');
   for (const [re, en] of VI) if (re.test(q)) q += ' ' + en;
   const qw = new Set(words(q));
-  if (!qw.size) return [];
-  return skills
+  const picked = !qw.size ? [] : skills
+    .filter((s) => !pinSet.has(s.name))
     .map((s) => {
       const nameWords = new Set(words(s.name.replace(/[-_/:.]/g, ' ')));
       const descWords = new Set(words(s.description));
@@ -66,6 +76,7 @@ function pickRelevant(message, skills, max = 3) {
     .sort((a, b) => b.score - a.score || a.s.name.localeCompare(b.s.name))
     .slice(0, max)
     .map((x) => x.s);
+  return [...pinnedList, ...picked];
 }
 
 // The hint put in front of a message (and taken off again for display).

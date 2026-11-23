@@ -1148,6 +1148,99 @@ button.send .codicon { font-size: 14px; }
   padding: 8px 12px; color: var(--vscode-textLink-foreground); font-weight: 500;
 }
 #popup .item.pfoot .pname { font-family: inherit; }
+
+/* ---- syntax highlighting (VS Code theme tokens) ---- */
+.hljs .hl-cmt { color: var(--vscode-descriptionForeground); font-style: italic; opacity: .82; }
+.hljs .hl-kw { color: var(--vscode-symbolIcon-keywordForeground, var(--vscode-charts-purple, #c586c0)); font-weight: 500; }
+.hljs .hl-str { color: var(--vscode-symbolIcon-stringForeground, var(--vscode-charts-orange, #ce9178)); }
+.hljs .hl-num { color: var(--vscode-symbolIcon-numberForeground, var(--vscode-charts-green, #b5cea8)); }
+.hljs .hl-fn { color: var(--vscode-symbolIcon-functionForeground, var(--vscode-charts-yellow, #dcdcaa)); }
+.hljs .hl-type { color: var(--vscode-symbolIcon-classForeground, var(--vscode-charts-blue, #4ec9b0)); }
+.hljs .hl-tag { color: var(--vscode-charts-blue, #569cd6); }
+.hljs .hl-key { color: var(--vscode-charts-blue, #9cdcfe); }
+.hljs .hl-dec { color: var(--vscode-charts-yellow, #dcdcaa); }
+.hljs .hl-add { color: var(--omp-ok); }
+.hljs .hl-del { color: var(--omp-err); }
+.hljs .hl-meta { color: var(--vscode-textLink-foreground); font-weight: 600; }
+
+/* ---- Mermaid inline SVG ---- */
+.mmwrap {
+  overflow: auto; padding: 12px; border-radius: 8px;
+  background: var(--vscode-textCodeBlock-background); border: 1px solid var(--omp-border);
+  text-align: center;
+}
+.mm-svg { max-width: 100%; height: auto; }
+.mm-box { fill: var(--omp-surface); stroke: var(--omp-border-strong); stroke-width: 1.5; }
+.mm-lbl { fill: var(--vscode-foreground); font-size: 12px; font-family: var(--vscode-font-family); }
+.mm-edge { stroke: var(--vscode-descriptionForeground); stroke-width: 1.5; }
+.mm-elbl { fill: var(--vscode-descriptionForeground); font-size: 11px; font-family: var(--vscode-font-family); }
+.mm-arr { fill: var(--vscode-descriptionForeground); }
+.mm-life { stroke: var(--omp-border-strong); stroke-dasharray: 4 4; stroke-width: 1; }
+
+/* ---- Search bar (Ctrl+F), Lightbox, Worktree bar, Review bar ---- */
+#searchBar {
+  display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+  background: var(--omp-surface); border-bottom: 1px solid var(--omp-border-strong);
+  box-shadow: var(--omp-shadow-sm);
+}
+#searchInput {
+  flex: 1; min-width: 0; border: 1px solid var(--vscode-input-border, var(--omp-border-strong));
+  background: var(--vscode-input-background); color: var(--vscode-input-foreground);
+  border-radius: 6px; padding: 3px 8px; font: inherit; outline: none;
+}
+#searchInput:focus { border-color: var(--vscode-focusBorder); }
+#searchCount { font-size: .84em; color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; }
+.turn.search-hit, .shell.search-hit { border-radius: 8px; box-shadow: inset 2.5px 0 var(--omp-warn); padding-left: 8px; }
+.turn.search-cur, .shell.search-cur { box-shadow: inset 3px 0 var(--vscode-focusBorder); background: color-mix(in srgb, var(--vscode-focusBorder) 9%, transparent); }
+
+#lightbox {
+  position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, .75); padding: 20px; cursor: zoom-out;
+}
+#lightbox img { max-width: 96%; max-height: 96%; border-radius: 10px; box-shadow: var(--omp-shadow-lg); }
+.uimgs img, .thumb img { cursor: zoom-in; }
+.bubble .uctx { cursor: pointer; }
+.bubble .uctx:hover { opacity: 1; text-decoration: underline; }
+
+#wtBar {
+  display: flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: .88em;
+  background: var(--omp-surface); border-bottom: 1px solid var(--omp-border-strong);
+}
+#wtBar .wtbranch { font-family: var(--vscode-editor-font-family); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wtbtn {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 6px; font-size: .92em;
+  border: 1px solid var(--omp-border); background: var(--omp-surface-subtle);
+}
+.wtbtn:hover { background: var(--omp-surface-hover); }
+.wtbtn.bad { color: var(--omp-err); }
+
+#reviewBar {
+  margin-bottom: 7px; border-radius: 10px; font-size: .9em; overflow: hidden;
+  border: 1px solid var(--omp-border-strong); background: var(--omp-surface);
+  box-shadow: var(--omp-shadow-sm);
+}
+.rvhead { display: flex; align-items: center; gap: 6px; padding: 5px 8px; }
+.rvtoggle { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; padding: 2px 4px; }
+.rvtoggle .muted { font-weight: 400; color: var(--vscode-descriptionForeground); }
+.rvbtn { padding: 2px 8px; border-radius: 6px; font-size: .88em; font-weight: 500; border: 1px solid var(--omp-border); }
+.rvbtn.ok { color: var(--omp-ok); border-color: color-mix(in srgb, var(--omp-ok) 45%, var(--omp-border)); }
+.rvbtn.ok:hover { background: color-mix(in srgb, var(--omp-ok) 14%, transparent); }
+.rvbtn.bad { color: var(--omp-err); border-color: color-mix(in srgb, var(--omp-err) 45%, var(--omp-border)); }
+.rvbtn.bad:hover { background: color-mix(in srgb, var(--omp-err) 14%, transparent); }
+.rvlist { border-top: 1px solid var(--omp-border); max-height: 150px; overflow-y: auto; padding: 4px 6px; }
+.rvrow { display: flex; align-items: center; gap: 4px; padding: 2px 4px; border-radius: 5px; }
+.rvrow:hover { background: var(--omp-surface-hover); }
+.rvname { flex: 1; min-width: 0; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--vscode-editor-font-family); font-size: .92em; padding: 2px 4px; }
+.rvstat { display: inline-flex; gap: 4px; font-size: .85em; font-variant-numeric: tabular-nums; }
+
+/* ---- Sheet additions (MCP buttons, Memory/Rules add bar, Key test badge, Pinned skill) ---- */
+.sbtns { display: inline-flex; gap: 6px; flex: none; }
+.ruleadd { display: flex; gap: 6px; margin: 6px 0 8px; }
+.ruleadd .finput { flex: 1; }
+.ktest { font-size: .84em; margin-top: 3px; color: var(--vscode-descriptionForeground); }
+.ktest.ok { color: var(--omp-ok); }
+.ktest.bad { color: var(--omp-err); }
+.prow .pinon { color: var(--vscode-textLink-foreground); opacity: 1; }
 #popup .pname { font-family: var(--vscode-editor-font-family); }
 #popup .pdesc { color: var(--vscode-descriptionForeground); overflow: hidden; text-overflow: ellipsis; }
 #popup .item.active .pdesc { color: inherit; opacity: .82; }

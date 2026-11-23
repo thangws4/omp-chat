@@ -16,7 +16,13 @@
   "command.explain": "Giải thích bằng OMP Chat",
   "command.fix": "Sửa bằng OMP Chat",
   "command.commands": "Lệnh tự tạo…",
+  "command.agents": "Subagent tự tạo…",
+  "command.memory": "Bộ nhớ dự án…",
+  "command.commandRules": "Quy tắc lệnh được phép / bị chặn…",
   "command.mcp": "MCP server…",
+  "command.inlineEdit": "Sửa trực tiếp bằng OMP Chat",
+  "command.generateCommit": "Tạo commit message (OMP Chat)",
+  "command.clearAttachments": "Xóa bộ nhớ đệm file đính kèm",
   "view.chat": "Trò chuyện",
   "config.title": "OMP Chat",
   "config.ompPath": "Đường dẫn tới file chạy omp.",
@@ -40,5 +46,8 @@
   "command.rejectChange": "Từ chối thay đổi tại con trỏ",
   "command.compareReview": "So sánh với file trước khi OMP sửa",
   "config.notifications": "Hiện thông báo khi một chat cần bạn trả lời trong lúc chat bị ẩn hoặc VS Code đang ở nền, và khi chat làm xong trong lúc VS Code đang ở nền.",
-  "config.allowedCommands": "Các lệnh shell agent được chạy mà không cần hỏi, ở mọi chế độ duyệt trừ Plan. Mỗi mẫu phải khớp cả lệnh; `*` khớp với mọi thứ (`npm test*`, `git status`). Lệnh có `&&`, `|`, `;`, `$(…)` hoặc `>` vẫn phải hỏi, lệnh mà omp coi là nguy hiểm cũng vậy. Nút **Always allow** trên thẻ duyệt lệnh sẽ thêm lệnh vào danh sách này."
+  "config.allowedCommands": "Các lệnh shell agent được chạy mà không cần hỏi, ở mọi chế độ duyệt trừ Plan. Mỗi mẫu phải khớp cả lệnh; `*` khớp với mọi thứ (`npm test*`, `git status`). Lệnh có `&&`, `|`, `;`, `$(…)` hoặc `>` vẫn phải hỏi, lệnh mà omp coi là nguy hiểm cũng vậy. Nút **Always allow** trên thẻ duyệt lệnh sẽ thêm lệnh vào danh sách này.",
+  "config.deniedCommands": "Các mẫu lệnh shell luôn bị tự động chặn ở mọi chế độ duyệt (vd. `rm -rf *`, `git push --force*`).",
+  "config.fallbackModel": "Model dự phòng tùy chọn (`provider/model`) để tự chuyển sang khi tất cả API key của nhà cung cấp hiện tại hết quota hoặc số dư.",
+  "config.budgetAlert": "Cảnh báo khi chi phí một cuộc trò chuyện đạt mức USD này (0 = tắt)."
 }

@@ -4,6 +4,9 @@ const { spawn } = require('child_process');
 const { StringDecoder } = require('string_decoder');
 const { EventEmitter } = require('events');
 
+// Run a turn or a shell, or wait on omp's startup (MCP servers connecting): no timeout.
+const SLOW = new Set(['prompt', 'bash', 'branch', 'new_session', 'switch_session', 'get_messages', 'get_entries']);
+
 class OmpClient extends EventEmitter {
   constructor({ command, args, cwd, env }) {
     super();
@@ -12,8 +15,9 @@ class OmpClient extends EventEmitter {
     this.cwd = cwd;
     this.env = env;
     this.proc = null;
+    this.killTimer = null;
     this.seq = 0;
-    this.pending = new Map(); // request id -> { resolve, reject }
+    this.pending = new Map(); // request id -> { resolve, reject, timer }
     this.chunks = new Map();  // v2 chunkId -> base64 parts
   }
 
@@ -61,7 +65,8 @@ class OmpClient extends EventEmitter {
       rec = JSON.parse(Buffer.concat(parts.map((p) => Buffer.from(p, 'base64'))).toString('utf8'));
     }
     if (rec.type === 'response' && this.pending.has(rec.id)) {
-      const { resolve, reject } = this.pending.get(rec.id);
+      const { resolve, reject, timer } = this.pending.get(rec.id);
+      if (timer) clearTimeout(timer);
       this.pending.delete(rec.id);
       return rec.success === false ? reject(new Error(rec.error || `${rec.command} failed`)) : resolve(rec.data);
     }
@@ -70,8 +75,12 @@ class OmpClient extends EventEmitter {
   }
 
   onExit(info) {
+    if (this.killTimer) { clearTimeout(this.killTimer); this.killTimer = null; }
     this.proc = null;
-    for (const { reject } of this.pending.values()) reject(new Error('omp exited'));
+    for (const { reject, timer } of this.pending.values()) {
+      if (timer) clearTimeout(timer);
+      reject(new Error('omp exited'));
+    }
     this.pending.clear();
     this.emit('exit', info);
   }
@@ -84,12 +93,18 @@ class OmpClient extends EventEmitter {
     return id;
   }
 
-  // Send a command and resolve with its response data (rejects on success: false).
-  request(cmd) {
+  // Send a command and resolve with its response data (rejects on success: false or timeout).
+  request(cmd, timeoutMs = SLOW.has(cmd.type) ? 0 : 45000) {
     if (!this.proc) return Promise.reject(new Error('omp is not running'));
     return new Promise((resolve, reject) => {
       const id = 'req_' + ++this.seq;
-      this.pending.set(id, { resolve, reject });
+      const timer = timeoutMs > 0 ? setTimeout(() => {
+        if (!this.pending.has(id)) return;
+        this.pending.delete(id);
+        reject(new Error(`${cmd.type || 'request'} timed out after ${Math.round(timeoutMs / 1000)}s`));
+      }, timeoutMs) : null;
+      if (timer?.unref) timer.unref();
+      this.pending.set(id, { resolve, reject, timer });
       this.send({ ...cmd, id });
     });
   }
@@ -109,7 +124,8 @@ class OmpClient extends EventEmitter {
     if (!this.proc) return;
     try { this.proc.stdin.end(); } catch {}
     const p = this.proc;
-    setTimeout(() => { try { p.kill(); } catch {} }, 1500);
+    this.killTimer = setTimeout(() => { this.killTimer = null; try { p.kill(); } catch {} }, 1500);
+    if (this.killTimer.unref) this.killTimer.unref();
     this.proc = null;
   }
 }
