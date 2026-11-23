@@ -28,6 +28,7 @@ const { parseFileRef, titleHeader } = require('../extension')._test;
   // file references as models write them
   assert.deepStrictEqual(parseFileRef('src/a.ts:12:3'), { file: 'src/a.ts', line: 12, col: 3 });
   assert.deepStrictEqual(parseFileRef('src/a.ts#L7-L9'), { file: 'src/a.ts', line: 7, col: 0 });
+  assert.deepStrictEqual(parseFileRef('src/a.ts:10-20'), { file: 'src/a.ts', line: 10, col: 0 }); // a selection chip
   assert.deepStrictEqual(parseFileRef('C:\\x\\a.ts:4'), { file: 'C:\\x\\a.ts', line: 4, col: 0 });
   assert.deepStrictEqual(parseFileRef('a.ts'), { file: 'a.ts', line: 0, col: 0 });
 

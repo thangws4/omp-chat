@@ -16,7 +16,13 @@
   "command.explain": "Explain with OMP Chat",
   "command.fix": "Fix with OMP Chat",
   "command.commands": "Custom Commands…",
+  "command.agents": "Custom Subagents…",
+  "command.memory": "Project Memory…",
+  "command.commandRules": "Allowed & Denied Commands…",
   "command.mcp": "MCP Servers…",
+  "command.inlineEdit": "Inline Edit with OMP Chat",
+  "command.generateCommit": "Generate Commit Message (OMP Chat)",
+  "command.clearAttachments": "Clear Cached Attachments",
   "view.chat": "Chat",
   "config.title": "OMP Chat",
   "config.ompPath": "Path to the omp executable.",
@@ -40,5 +46,8 @@
   "command.rejectChange": "Reject Change at Cursor",
   "command.compareReview": "Compare with the File Before OMP's Edits",
   "config.notifications": "Show a notification when a chat needs your answer while it is hidden or VS Code is in the background, and when it finishes while VS Code is in the background.",
-  "config.allowedCommands": "Shell commands the agent runs without asking, in every approval mode except Plan. A pattern covers the whole command; `*` matches anything (`npm test*`, `git status`). A command with `&&`, `|`, `;`, `$(…)` or `>` still asks, and so do commands omp flags as dangerous. **Always allow** on a command's approval card adds one."
+  "config.allowedCommands": "Shell commands the agent runs without asking, in every approval mode except Plan. A pattern covers the whole command; `*` matches anything (`npm test*`, `git status`). A command with `&&`, `|`, `;`, `$(…)` or `>` still asks, and so do commands omp flags as dangerous. **Always allow** on a command's approval card adds one.",
+  "config.deniedCommands": "Shell command patterns that are always blocked automatically in every approval mode (e.g. `rm -rf *`, `git push --force*`).",
+  "config.fallbackModel": "Optional fallback model (`provider/model`) to switch to automatically when all API keys of the current provider hit their quota or credit limit.",
+  "config.budgetAlert": "Warn when a single chat reaches this cost in USD (0 = disabled)."
 }

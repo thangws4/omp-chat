@@ -1,6 +1,14 @@
 (function () {
   const vscode = acquireVsCodeApi();
-  const md = window.markdownit({ html: false, linkify: true });
+  const hl = window.ompHighlight;
+  const md = window.markdownit({
+    html: false, linkify: true,
+    // markdown-it inserts this as raw HTML: the fence's language word comes from the model, so keep only name characters.
+    highlight: (code, lang) => {
+      lang = String(lang || '').replace(/[^\w+#.-]/g, '');
+      return hl ? `<pre class="hljs"><code class="language-${lang}">${hl.highlight(code, lang)}</code></pre>` : '';
+    },
+  });
   const mdLines = window.markdownit({ html: false, linkify: true, breaks: true }); // command output is line-oriented
   const $ = (id) => document.getElementById(id);
   // The panel in VS Code's language when the extension sent a dictionary (media/l10n.js); chat content stays as written.
@@ -134,6 +142,17 @@
       wrap.appendChild(pre);
       const code = () => pre.querySelector('code')?.textContent ?? pre.textContent;
       const lang = /language-(\S+)/.exec(pre.querySelector('code')?.className || '')?.[1] || '';
+      // Mermaid diagrams: render lightweight SVG with a toggle to view source.
+      let mmView = null;
+      if (lang.toLowerCase() === 'mermaid' && hl?.renderMermaid) {
+        const svg = hl.renderMermaid(code());
+        if (svg) {
+          mmView = el('div', 'mmwrap');
+          mmView.innerHTML = svg;
+          pre.hidden = true;
+          wrap.appendChild(mmView);
+        }
+      }
       const bar = el('div', 'codeacts');
       const act = (name, title, fn) => {
         const b = el('button', 'icon');
@@ -143,6 +162,9 @@
         b.onclick = () => fn(b);
         bar.appendChild(b);
       };
+      if (mmView) {
+        act('code', 'Toggle diagram / source', () => { mmView.hidden = !mmView.hidden; pre.hidden = !mmView.hidden; });
+      }
       act('insert', 'Insert at cursor', () => vscode.postMessage({ type: 'insertCode', code: code() }));
       act('new-file', 'Open in new file', () => vscode.postMessage({ type: 'newFileFromCode', code: code(), lang }));
       act('copy', 'Copy', (b) => {
@@ -339,6 +361,8 @@
       const t = el('div', 'thumb');
       const im = el('img');
       im.src = p.url;
+      im.title = 'Click to preview';
+      im.onclick = () => openLightbox(p.url);
       const x = el('button', 'icon tx');
       x.title = 'Remove image';
       x.appendChild(icon('close'));
@@ -444,7 +468,15 @@
     open.title = 'Open the subagent map';
     open.append(icon('type-hierarchy-sub'), el('span', '', 'Open map'));
     open.onclick = () => vscode.postMessage({ type: 'openMap' });
-    head.append(el('span', '', `Subagents · ${running ? `${running} running` : 'all finished'}`), el('span', 'spacer'), open);
+    head.append(el('span', '', `Subagents · ${running ? `${running} running` : 'all finished'}`), el('span', 'spacer'));
+    if (running > 1) {
+      const stopAll = el('button', 'icon');
+      stopAll.title = 'Stop all running subagents';
+      stopAll.append(icon('debug-stop'), el('span', '', 'Stop all'));
+      stopAll.onclick = () => vscode.postMessage({ type: 'stopAllSubagents' });
+      head.append(stopAll);
+    }
+    head.append(open);
     bar.appendChild(head);
     for (const m of items) {
       const r = el('button', 'arow ' + m.status);
@@ -611,7 +643,7 @@
     title.append(icon('shield'), el('span', '', head));
     card.appendChild(title);
     if (rest.length) card.appendChild(el('pre', 'cbody', rest.join('\n')));
-    const preview = /^Allow tool:/.test(head) && running?._tool && previewDiff(running._tool.name, running._tool.args);
+    const preview = m.diff || (/^Allow tool:/.test(head) && running?._tool && previewDiff(running._tool.name, running._tool.args));
     if (preview) card.appendChild(diffView(preview));
     // Text questions from omp ("input" one line, "editor" multi-line) get a box in the card.
     let box = null;
@@ -780,15 +812,26 @@
       if (f.type === 'select') {
         inp = el('select', 'finput');
         for (const o of f.options) { const op = el('option', '', o.label); op.value = o.value; inp.appendChild(op); }
-        if (f.options.some((o) => o.link)) { // where to get one, for the option picked
+        if (f.options.some((o) => o.link || o.defaultBaseUrl || o.optionalKey)) { // dynamic provider link, default baseUrl, optional key
           after = el('a', 'flink');
+          let lastDefaultUrl = '';
           const sync = () => {
             const o = f.options.find((x) => x.value === inp.value);
             after.hidden = !o?.link;
-            if (!o?.link) return;
-            after.href = o.link;
-            after.textContent = '';
-            after.append(icon('link-external'), el('span', '', `Get a key at ${o.link.replace(/^https?:\/\//, '').replace(/\/$/, '')}`));
+            if (o?.link) {
+              after.href = o.link;
+              after.textContent = '';
+              after.append(icon('link-external'), el('span', '', `Get a key at ${o.link.replace(/^https?:\/\//, '').replace(/\/$/, '')}`));
+            }
+            if (inputs.baseUrl && (!inputs.baseUrl.value || inputs.baseUrl.value === lastDefaultUrl)) {
+              inputs.baseUrl.value = o?.defaultBaseUrl || '';
+              lastDefaultUrl = o?.defaultBaseUrl || '';
+            }
+            const keyField = (m.fields || []).find((x) => x.name === 'key');
+            if (keyField && inputs.key) {
+              keyField.required = !o?.optionalKey;
+              inputs.key.placeholder = o?.optionalKey ? 'Optional for local servers (leave blank)' : 'Paste the key';
+            }
           };
           inp.addEventListener('change', sync);
           queueMicrotask(sync); // once the value below is set
@@ -860,14 +903,18 @@
     const s = openSheet('Plugins & skills', 'extensions', () => vscode.postMessage({ type: 'plugins', refresh: true }));
     s.classList.add('plugins');
     const state = new Map(), was = new Map(); // skill name -> enabled (now / when opened)
-    for (const g of m.groups) for (const k of g.skills) { state.set(k.name, k.enabled); was.set(k.name, k.enabled); }
+    const pinState = new Map(), wasPin = new Map();
+    for (const g of m.groups) for (const k of g.skills) {
+      state.set(k.name, k.enabled); was.set(k.name, k.enabled);
+      pinState.set(k.name, !!k.pinned); wasPin.set(k.name, !!k.pinned);
+    }
 
     // Auto-pick: a setting card above the list
     const auto = toggle(m.auto, 'Name matching skills to the agent with each message');
     const autoCard = el('label', 'pauto');
     const autoText = el('span', 'ptext');
     autoText.append(el('span', 'pname', 'Auto-pick skills for each message'),
-      el('span', 'pdesc2', 'Switched-on skills are always offered to the agent; auto-pick also names the best matches for each request.'));
+      el('span', 'pdesc2', 'Switched-on skills are always offered to the agent; auto-pick also names the best matches for each request. Pin (📌) a skill to always include it.'));
     autoCard.append(autoText, auto.label);
     s.appendChild(autoCard);
 
@@ -887,13 +934,16 @@
     cancel.onclick = closeSheet;
     apply.onclick = () => {
       const disabled = [...state].filter(([, en]) => !en).map(([n]) => n);
-      vscode.postMessage({ type: 'applyPlugins', disabled, auto: auto.box.checked });
+      const pinned = [...pinState].filter(([, p]) => p).map(([n]) => n);
+      vscode.postMessage({ type: 'applyPlugins', disabled, auto: auto.box.checked, pinned });
       closeSheet();
     };
     foot.append(changes, el('span', 'spacer'), cancel, apply);
     s.append(foot, el('div', 'unote pnote', 'Applies to this workspace. Apply restarts the agent and keeps the conversation.'));
     const update = () => {
-      const n = [...state].filter(([k, v]) => was.get(k) !== v).length + (auto.box.checked !== !!m.auto ? 1 : 0);
+      const n = [...state].filter(([k, v]) => was.get(k) !== v).length
+        + [...pinState].filter(([k, v]) => wasPin.get(k) !== v).length
+        + (auto.box.checked !== !!m.auto ? 1 : 0);
       changes.textContent = n ? `${n} change${n > 1 ? 's' : ''}` : 'No changes';
       apply.disabled = !n;
     };
@@ -937,11 +987,16 @@
               const row = el('div', 'prow skill' + (state.get(k.name) ? '' : ' off'));
               const st = toggle(state.get(k.name));
               st.box.onchange = () => { state.set(k.name, st.box.checked); render(); };
+              const pinBtn = iconBtn(pinState.get(k.name) ? 'pinned' : 'pin', pinState.get(k.name) ? 'Unpin skill' : 'Always include this skill', () => {
+                pinState.set(k.name, !pinState.get(k.name));
+                render();
+              });
+              if (pinState.get(k.name)) pinBtn.classList.add('pinon');
               const text = el('div', 'ptext');
               const desc = el('div', 'pdesc2', k.description);
               desc.title = k.description;
               text.append(el('div', 'pname', k.name), desc);
-              row.append(text, st.label);
+              row.append(text, pinBtn, st.label);
               card.appendChild(row);
             }
           }
@@ -967,7 +1022,14 @@
     const fav = m.favorites.map((x) => x.id);
     const byId = new Map((m.all || []).map((x) => [x.id, x]));
     for (const f of m.favorites) if (!byId.has(f.id)) byId.set(f.id, { id: f.id, name: f.name });
-    s.appendChild(el('div', 'unote', 'Star (☆) the models you use: only those appear in the chat\'s model list. Switching models keeps the conversation.'));
+    s.appendChild(el('div', 'unote', 'Star (☆) the models you use: only those appear in the chat\'s model list and subagent pool. Switching models keeps the conversation.'));
+    const favBanner = el('div', 'sbanner');
+    favBanner.hidden = !m.favChanged;
+    const applyFav = el('button', 'primary', 'Restart agent');
+    applyFav.title = 'The conversation is kept';
+    applyFav.onclick = () => { closeSheet(); vscode.postMessage({ type: 'applyFavorites' }); };
+    favBanner.append(icon('info'), el('span', '', 'Subagents use your starred models (★): restart the agent to apply changes.'), applyFav);
+    s.appendChild(favBanner);
 
     const row = (x, inFav, i, n) => {
       const r = el('div', 'mrow' + (x.id === m.current ? ' current' : ''));
@@ -1049,6 +1111,7 @@
       const i = fav.indexOf(id);
       if (i >= 0) fav.splice(i, 1); else fav.push(id);
       vscode.postMessage({ type: 'toggleFavorite', id });
+      favBanner.hidden = false;
       const back = modelFocus;
       renderFav();
       renderAll();
@@ -1183,7 +1246,18 @@
   function showMcpSheet(m) {
     const s = openSheet('MCP servers', 'plug', () => vscode.postMessage({ type: 'mcp' }));
     s.classList.add('lists');
-    sheetIntro(s, 'MCP servers give the agent extra tools: GitHub, databases, browsers…', 'Add server', () => vscode.postMessage({ type: 'addMcp' }));
+    const bar0 = el('div', 'sintro');
+    const btns = el('span', 'sbtns');
+    const editCfg = el('button', 'secondary');
+    editCfg.title = 'Open .omp/mcp.json';
+    editCfg.append(icon('json'), el('span', '', 'mcp.json'));
+    editCfg.onclick = () => vscode.postMessage({ type: 'openMcpConfig', scope: 'project' });
+    const add = el('button', 'primary');
+    add.append(icon('add'), el('span', '', 'Add server'));
+    add.onclick = () => vscode.postMessage({ type: 'addMcp' });
+    btns.append(editCfg, add);
+    bar0.append(el('span', 'unote', 'MCP servers give the agent extra tools: GitHub, databases, browsers…'), btns);
+    s.appendChild(bar0);
     if (m.changed) { // a banner until the agent restarts with the change
       const bar = el('div', 'sbanner');
       const apply = el('button', 'primary', 'Restart agent');
@@ -1216,6 +1290,111 @@
       empty.append(icon('plug'), el('div', '', 'No MCP servers yet.'),
         el('div', 'unote', 'Add one with a command (a local server, e.g. npx -y @modelcontextprotocol/server-filesystem .) or a URL (a remote server).'));
       scroll.appendChild(empty);
+    }
+  }
+
+  // ---- Custom subagents (.omp/agents/*.md) ----
+  function showAgentsSheet(m) {
+    const s = openSheet('Custom subagents', 'hubot', () => vscode.postMessage({ type: 'agentsSheet' }));
+    s.classList.add('lists');
+    sheetIntro(s, 'Define reusable specialized subagents (reviewer, tester, architect…) that the lead can delegate to.', 'New subagent', () => vscode.postMessage({ type: 'newAgent' }));
+    if (m.note) s.appendChild(el('div', 'unote snote', m.note));
+    const scroll = el('div', 'kscroll');
+    s.appendChild(scroll);
+    for (const [title, test] of [['This project', (a) => a.scope.startsWith('project')], ['All projects', (a) => !a.scope.startsWith('project')]]) {
+      const list = (m.list || []).filter(test);
+      if (!list.length) continue;
+      scroll.appendChild(el('div', 'ush', `${title} · ${list.length}`));
+      const card = el('div', 'kcard');
+      for (const a of list) {
+        card.appendChild(listRow({
+          title: a.name, titleClass: 'mono', badges: [a.model ? a.model.split('/').pop() : '', /\.claude/.test(a.scope) ? '.claude' : ''],
+          sub: a.description || 'No description',
+          onPick: () => vscode.postMessage({ type: 'editAgent', file: a.file }), pickTitle: 'Edit the file',
+          actions: [iconBtn('edit', 'Edit the file', () => vscode.postMessage({ type: 'editAgent', file: a.file })),
+            confirmButton('Delete?', 'trash', 'Delete (moves the file to the trash)', () => vscode.postMessage({ type: 'deleteAgent', file: a.file }))],
+        }));
+      }
+      scroll.appendChild(card);
+    }
+    if (!m.list?.length) {
+      const empty = el('div', 'sempty');
+      empty.append(icon('hubot'), el('div', '', 'No custom subagents yet.'),
+        el('div', 'unote', 'Create Markdown agent definitions in .omp/agents/ or ~/.omp/agent/agents/ to customize how subagents work.'));
+      scroll.appendChild(empty);
+    }
+  }
+
+  // ---- Project memory manager (AGENTS.md / CLAUDE.md) ----
+  function showMemorySheet(m) {
+    const s = openSheet(`Memory · ${m.file}`, 'bookmark', () => vscode.postMessage({ type: 'memorySheet' }));
+    s.classList.add('lists');
+    const bar0 = el('div', 'sintro');
+    const openBtn = el('button', 'secondary');
+    openBtn.append(icon('go-to-file'), el('span', '', 'Open file'));
+    openBtn.onclick = () => vscode.postMessage({ type: 'openMemoryFile' });
+    bar0.append(el('span', 'unote', 'Notes read by the agent at the start of every chat. You can also type # note in the message box.'), openBtn);
+    s.appendChild(bar0);
+    if (m.note) s.appendChild(el('div', 'unote snote', m.note));
+    const addRow = el('div', 'ruleadd');
+    const inp = el('input', 'finput');
+    inp.placeholder = 'Add a project memory note (e.g. use pnpm, not npm)';
+    const addBtn = el('button', 'primary', 'Add');
+    const submit = () => { if (inp.value.trim()) { vscode.postMessage({ type: 'addMemory', note: inp.value.trim() }); inp.value = ''; } };
+    inp.onkeydown = (e) => { if (e.key === 'Enter') submit(); };
+    addBtn.onclick = submit;
+    addRow.append(inp, addBtn);
+    s.appendChild(addRow);
+    const scroll = el('div', 'kscroll');
+    s.appendChild(scroll);
+    if (m.items?.length) {
+      const card = el('div', 'kcard');
+      for (const it of m.items) {
+        card.appendChild(listRow({
+          title: it.text,
+          actions: [confirmButton('Delete?', 'trash', 'Remove this line', () => vscode.postMessage({ type: 'deleteMemory', index: it.index }))],
+        }));
+      }
+      scroll.appendChild(card);
+    } else {
+      const empty = el('div', 'sempty');
+      empty.append(icon('bookmark'), el('div', '', 'No memory notes yet.'),
+        el('div', 'unote', 'Add project conventions, build commands or rules here so the agent follows them automatically.'));
+      scroll.appendChild(empty);
+    }
+  }
+
+  // ---- Allowed & denied shell command rules ----
+  function showRulesSheet(m) {
+    const s = openSheet('Command rules', 'shield', () => vscode.postMessage({ type: 'rulesSheet' }));
+    s.classList.add('lists');
+    s.appendChild(el('div', 'unote', 'Manage shell command patterns. Allowed commands run without asking; denied commands are always blocked.'));
+    const scroll = el('div', 'kscroll');
+    s.appendChild(scroll);
+    for (const [kind, title, ph, list] of [
+      ['allowed', 'Allowed commands', 'e.g. npm test*, git status', m.allowed || []],
+      ['denied', 'Denied commands (always blocked)', 'e.g. rm -rf *, git push --force*', m.denied || []],
+    ]) {
+      scroll.appendChild(el('div', 'ush', `${title} · ${list.length}`));
+      const addRow = el('div', 'ruleadd');
+      const inp = el('input', 'finput');
+      inp.placeholder = ph;
+      const addBtn = el('button', 'secondary', 'Add');
+      const go = () => { if (inp.value.trim()) { vscode.postMessage({ type: 'addRule', kind, pattern: inp.value.trim() }); inp.value = ''; } };
+      inp.onkeydown = (e) => { if (e.key === 'Enter') go(); };
+      addBtn.onclick = go;
+      addRow.append(inp, addBtn);
+      scroll.appendChild(addRow);
+      if (list.length) {
+        const card = el('div', 'kcard');
+        for (const p of list) {
+          card.appendChild(listRow({
+            title: p, titleClass: 'mono',
+            actions: [iconBtn('close', 'Remove', () => vscode.postMessage({ type: 'removeRule', kind, pattern: p }))],
+          }));
+        }
+        scroll.appendChild(card);
+      }
     }
   }
 
@@ -1292,11 +1471,22 @@
           rm.classList.add('armed');
           setTimeout(() => { delete rm.dataset.armed; rm.classList.remove('armed'); rm.title = 'Remove'; }, 3000);
         };
+        const testBtn = el('button', 'icon');
+        testBtn.title = 'Test connection';
+        testBtn.appendChild(icon('debug-start'));
+        testBtn.onclick = () => {
+          testBtn.disabled = true;
+          const badge = r.querySelector('.ktest') || text.appendChild(el('div', 'ktest'));
+          badge.className = 'ktest';
+          badge.textContent = 'Testing…';
+          vscode.postMessage({ type: 'testKey', env: g.env, id: k.id });
+        };
         const url = el('button', 'icon');
         url.title = 'Base URL';
         url.appendChild(icon('globe'));
         url.onclick = () => vscode.postMessage({ type: 'editBaseUrl', env: g.env, id: k.id });
-        acts.append(ren, url, rm);
+        r.dataset.keyId = k.id;
+        acts.append(testBtn, ren, url, rm);
         r.appendChild(acts);
         card.appendChild(r);
       }
@@ -1627,8 +1817,16 @@
     if (ownFilter(pk)) {
       const head = el('div', 'phead');
       pk.filter ??= el('input', 'pfilter');
-      pk.filter.placeholder = pk.kind === 'model' ? 'Filter your models' : 'Filter conversations';
-      pk.filter.oninput = () => { pk.active = 0; filterPicker(pk.filter.value); };
+      pk.filter.placeholder = pk.kind === 'model' ? 'Filter your models' : 'Filter or search conversations…';
+      pk.filter.oninput = () => {
+        pk.active = 0;
+        filterPicker(pk.filter.value);
+        if (pk.kind === 'history') {
+          clearTimeout(pk._searchTimer);
+          const q = pk.filter.value.trim();
+          if (q.length >= 2) pk._searchTimer = setTimeout(() => vscode.postMessage({ type: 'searchSessions', query: q }), 250);
+        }
+      };
       pk.filter.onkeydown = pickerKeys;
       pk.filter.onblur = () => setTimeout(() => { if (ownFilter(pk) && document.activeElement !== pk.filter) hidePicker(); }, 150);
       head.append(icon(pk.kind === 'model' ? 'sparkle' : 'history'), pk.filter);
@@ -1708,7 +1906,7 @@
       hidePicker();
       input.focus();
     } else if (pk.kind === 'history' && (e.key === 'F2' || (e.key === 'Delete' && !pk.filter?.value))) {
-      const a = pk.items[pk.active].actions?.[e.key === 'F2' ? 0 : 1]; // Delete with filter text edits the filter
+      const a = pk.items[pk.active].actions?.[e.key === 'F2' ? 1 : 2]; // [0]=Pin, [1]=Rename, [2]=Delete
       hidePicker();
       if (a) vscode.postMessage(a.msg);
     } else return false;
@@ -1771,14 +1969,33 @@
     if (g === 'Previous 7 days') return d.toLocaleDateString([], { weekday: 'short' });
     return d.toLocaleDateString([], { month: 'short', day: 'numeric', ...(d.getFullYear() !== new Date().getFullYear() && { year: 'numeric' }) });
   }
-  function showSessions(m) { // the list comes newest first
-    const all = m.list.map((x) => ({ key: x.title, label: x.title, desc: when(x.when), badge: x.current ? 'current' : '', file: x.file, group: dayGroup(x.when),
+  function showSessions(m) { // the list comes pinned first, then newest first
+    const all = m.list.map((x) => ({ key: x.title, label: x.title, desc: when(x.when), badge: x.current ? 'current' : '', file: x.file,
+      icon: x.pinned ? 'pinned' : undefined, group: x.pinned ? 'Pinned' : dayGroup(x.when),
       tip: `${x.title}\n${new Date(x.when).toLocaleString()}`, cls: x.current ? 'cur' : '',
-      actions: [{ icon: 'edit', title: 'Rename (F2)', msg: { type: 'renameSession', file: x.file } },
-        { icon: 'trash', title: 'Delete (Del)', msg: { type: 'deleteSession', file: x.file } }] }));
+      actions: [
+        { icon: x.pinned ? 'pinned' : 'pin', title: x.pinned ? 'Unpin' : 'Pin', msg: { type: 'pinSession', file: x.file } },
+        { icon: 'edit', title: 'Rename (F2)', msg: { type: 'renameSession', file: x.file } },
+        { icon: 'trash', title: 'Delete (Del)', msg: { type: 'deleteSession', file: x.file } },
+      ] }));
     pk = null;
     openPicker('history', all, (it) => vscode.postMessage({ type: 'openSession', file: it.file }));
     pk.active = Math.max(0, all.findIndex((x) => !x.badge)); // Enter opens the latest other conversation
+    renderPicker();
+  }
+  function applySessionSearch(m) {
+    if (!pk || pk.kind !== 'history' || pk.filter?.value.trim() !== m.query) return;
+    pk.items = (m.list || []).map((x) => ({
+      key: x.title, label: x.title, sub: x.snippet && x.snippet !== x.title ? `…${x.snippet}…` : '', desc: when(x.when),
+      badge: x.current ? 'current' : '', file: x.file, icon: x.pinned ? 'pinned' : undefined,
+      tip: `${x.title}\n${new Date(x.when).toLocaleString()}`, cls: x.current ? 'cur' : '',
+      actions: [
+        { icon: x.pinned ? 'pinned' : 'pin', title: x.pinned ? 'Unpin' : 'Pin', msg: { type: 'pinSession', file: x.file } },
+        { icon: 'edit', title: 'Rename (F2)', msg: { type: 'renameSession', file: x.file } },
+        { icon: 'trash', title: 'Delete (Del)', msg: { type: 'deleteSession', file: x.file } },
+      ],
+    }));
+    pk.active = 0;
     renderPicker();
   }
   const modelBadge = (x) => (x.usedUp ? `used up · ${x.usedUp}` : x.plan ? 'Go plan' : x.free ? 'free' : '');
@@ -1842,21 +2059,143 @@
     }
   }
 
-  // Under each finished reply: copy the whole answer, and what the turn cost.
+  // Under each finished reply: copy the whole answer, retry/regenerate, and what the turn cost.
   function turnFooter(t) {
     if (!t || !t.querySelector('.md, .tool')) return t?._foot;
     const f = t._foot || (t._foot = t.appendChild(el('div', 'tfoot')));
-    if (f._copy || !t.querySelector('.md')) return f; // tools only: nothing to copy
-    const b = f._copy = el('button', 'icon');
-    b.title = 'Copy answer (Markdown)';
-    b.appendChild(icon('copy'));
-    b.onclick = () => {
-      navigator.clipboard.writeText([...t.querySelectorAll('.md')].map((e) => (e._raw || '').trim()).filter(Boolean).join('\n\n'));
-      b.firstChild.className = 'codicon codicon-check';
-      setTimeout(() => { b.firstChild.className = 'codicon codicon-copy'; }, 1200);
-    };
-    f.prepend(b);
+    // omp's /retry re-runs only its latest turn, so one Retry button lives on the newest footer (appending moves it).
+    f.appendChild(retryBtn);
+    if (!f._copy && t.querySelector('.md')) { // tools only, so far: the copy button comes once there is text
+      const b = f._copy = el('button', 'icon');
+      b.title = 'Copy answer (Markdown)';
+      b.appendChild(icon('copy'));
+      b.onclick = () => {
+        navigator.clipboard.writeText([...t.querySelectorAll('.md')].map((e) => (e._raw || '').trim()).filter(Boolean).join('\n\n'));
+        b.firstChild.className = 'codicon codicon-check';
+        setTimeout(() => { b.firstChild.className = 'codicon codicon-copy'; }, 1200);
+      };
+      f.prepend(b);
+    }
     return f;
+  }
+  const retryBtn = el('button', 'icon');
+  retryBtn.title = 'Retry this reply';
+  retryBtn.appendChild(icon('refresh'));
+  retryBtn.onclick = () => vscode.postMessage({ type: 'retryTurn' });
+
+  // ---- Image Lightbox ----
+  const lightbox = $('lightbox'), lightboxImg = $('lightboxImg');
+  function openLightbox(src) {
+    if (!lightbox || !lightboxImg) return;
+    lightboxImg.src = src;
+    lightbox.hidden = false;
+  }
+  if (lightbox) lightbox.onclick = () => { lightbox.hidden = true; lightboxImg.src = ''; };
+
+  // ---- In-conversation search bar (Ctrl+F) ----
+  const searchBar = $('searchBar'), searchInput = $('searchInput'), searchCount = $('searchCount');
+  let searchHits = [], searchAt = -1;
+  function clearSearchMarks() {
+    for (const h of searchHits) h.classList.remove('search-hit', 'search-cur');
+    searchHits = [];
+    searchAt = -1;
+    if (searchCount) searchCount.textContent = '';
+  }
+  function runSearch() {
+    clearSearchMarks();
+    const q = (searchInput?.value || '').trim().toLowerCase();
+    if (!q) return;
+    for (const elNode of log.querySelectorAll('.turn, .shell')) {
+      if (elNode.textContent.toLowerCase().includes(q)) {
+        elNode.classList.add('search-hit');
+        searchHits.push(elNode);
+      }
+    }
+    if (searchHits.length) jumpSearch(0);
+    else if (searchCount) searchCount.textContent = '0/0';
+  }
+  function jumpSearch(idx) {
+    if (!searchHits.length) return;
+    if (searchAt >= 0) searchHits[searchAt]?.classList.remove('search-cur');
+    searchAt = (idx + searchHits.length) % searchHits.length;
+    const curHit = searchHits[searchAt];
+    curHit.classList.add('search-cur');
+    curHit.scrollIntoView({ block: 'center' });
+    if (searchCount) searchCount.textContent = `${searchAt + 1}/${searchHits.length}`;
+  }
+  function closeSearch() {
+    if (!searchBar) return;
+    searchBar.hidden = true;
+    clearSearchMarks();
+    input.focus();
+  }
+  if (searchInput) {
+    searchInput.oninput = runSearch;
+    searchInput.onkeydown = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); jumpSearch(searchAt + (e.shiftKey ? -1 : 1)); }
+      else if (e.key === 'Escape') { e.preventDefault(); closeSearch(); }
+    };
+    $('searchPrev').onclick = () => jumpSearch(searchAt - 1);
+    $('searchNext').onclick = () => jumpSearch(searchAt + 1);
+    $('searchClose').onclick = closeSearch;
+  }
+
+  // ---- Pending Editor Review Bar (above composer) ----
+  let reviewOpen = false;
+  function renderReviewBar(files) {
+    const bar = $('reviewBar');
+    if (!bar) return;
+    bar.textContent = '';
+    if (!files?.length) { bar.hidden = true; return; }
+    const totalHunks = files.reduce((s, f) => s + (f.hunks || 0), 0);
+    const head = el('div', 'rvhead');
+    const toggleBtn = el('button', 'rvtoggle');
+    toggleBtn.append(icon(reviewOpen ? 'chevron-down' : 'chevron-right'), icon('diff'),
+      el('span', '', `${files.length} file${files.length > 1 ? 's' : ''} to review`),
+      el('span', 'muted', `(${totalHunks})`));
+    toggleBtn.onclick = () => { reviewOpen = !reviewOpen; renderReviewBar(files); };
+    const keepAll = el('button', 'rvbtn ok', 'Accept all');
+    keepAll.onclick = () => vscode.postMessage({ type: 'reviewAcceptAll' });
+    const undoAll = el('button', 'rvbtn bad', 'Reject all');
+    undoAll.onclick = () => vscode.postMessage({ type: 'reviewRejectAll' });
+    head.append(toggleBtn, el('span', 'spacer'), keepAll, undoAll);
+    bar.appendChild(head);
+    if (reviewOpen) {
+      const list = el('div', 'rvlist');
+      for (const f of files) {
+        const row = el('div', 'rvrow');
+        const name = el('button', 'rvname', f.rel);
+        name.title = f.rel;
+        name.onclick = () => vscode.postMessage({ type: 'reviewOpen', path: f.path });
+        const stat = el('span', 'rvstat');
+        if (f.plus) stat.appendChild(el('span', 'plus', '+' + f.plus));
+        if (f.minus) stat.appendChild(el('span', 'minus', '−' + f.minus));
+        row.append(name, stat,
+          iconBtn('diff', 'Compare', () => vscode.postMessage({ type: 'reviewCompare', path: f.path })),
+          iconBtn('check', 'Accept', () => vscode.postMessage({ type: 'reviewAcceptFile', path: f.path })),
+          iconBtn('close', 'Reject', () => vscode.postMessage({ type: 'reviewRejectFile', path: f.path })));
+        list.appendChild(row);
+      }
+      bar.appendChild(list);
+    }
+    bar.hidden = false;
+  }
+
+  // ---- Git Worktree top bar (inside worktree chat tabs) ----
+  function renderWorktreeBar(m) {
+    const bar = $('wtBar');
+    if (!bar) return;
+    bar.textContent = '';
+    if (!m?.branch) { bar.hidden = true; return; }
+    const act = (ic, label, kind, cls) => {
+      const b = el('button', 'wtbtn' + (cls ? ' ' + cls : ''));
+      b.append(icon(ic), el('span', '', label));
+      b.onclick = () => vscode.postMessage({ type: 'worktreeAction', kind });
+      return b;
+    };
+    bar.append(icon('git-branch'), el('span', 'wtbranch', m.branch), el('span', 'spacer'),
+      act('diff', 'Diff', 'diff'), act('git-merge', 'Merge', 'merge'), act('trash', 'Discard', 'discard', 'bad'));
+    bar.hidden = false;
   }
   const kTok = (n) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n));
   function showTurnStats(m) {
@@ -1995,6 +2334,13 @@
     setMode(MODES[(MODES.findIndex((x) => x.key === mode) + 1) % MODES.length].key);
   }
   document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+      e.preventDefault();
+      if (searchBar) { searchBar.hidden = false; searchInput?.focus(); searchInput?.select(); }
+      return;
+    }
+    if (e.key === 'Escape' && lightbox && !lightbox.hidden) { e.preventDefault(); lightbox.hidden = true; lightboxImg.src = ''; return; }
+    if (e.key === 'Escape' && searchBar && !searchBar.hidden) { e.preventDefault(); closeSearch(); return; }
     if (e.key === 'Escape' && busy && !pk && !openForm) { e.preventDefault(); vscode.postMessage({ type: 'stop' }); }
   });
 
@@ -2055,12 +2401,20 @@
         if (m.turn) addRewind(t, m.turn);
         if (m.images?.length) {
           const g = el('div', 'uimgs');
-          for (const src of m.images) { const im = el('img'); im.src = src; g.appendChild(im); }
+          for (const src of m.images) {
+            const im = el('img');
+            im.src = src;
+            im.title = 'Click to preview';
+            im.onclick = () => openLightbox(src);
+            g.appendChild(im);
+          }
           t._body.appendChild(g);
         }
         if (m.text) t._body.appendChild(el('div', 'utext', m.text));
-        for (const label of [].concat(m.context || [])) {
-          const c = el('div', 'uctx');
+        for (const [i, label] of [].concat(m.context || []).entries()) {
+          const c = el('button', 'uctx');
+          c.dataset.file = m.refs?.[i] || label; // the full path / file:lines; the label is often just a name
+          c.title = 'Open file';
           c.append(icon('file'), el('span', '', label));
           t._body.appendChild(c);
         }
@@ -2151,10 +2505,21 @@
         scroll();
         break;
       }
+      case 'shell_update': {
+        const b = shells.get(m.id);
+        if (!b) break;
+        b._live ??= b.appendChild(el('pre', 'out live'));
+        if (m.output !== undefined) b._live.textContent = m.output;
+        else if (m.chunk) b._live.textContent = (b._live.textContent + m.chunk).slice(-8000);
+        b._live.scrollTop = b._live.scrollHeight;
+        scroll();
+        break;
+      }
       case 'shell_end': {
         const b = shells.get(m.id);
         if (!b) break;
         shells.delete(m.id);
+        b._live?.remove();
         const ok = !m.cancelled && !m.timedOut && (m.exitCode === 0 || m.exitCode === undefined);
         b.classList.remove('running');
         b.classList.add(ok ? 'ok' : 'err');
@@ -2246,6 +2611,8 @@
           { key: 'problems', short: 'problems', label: 'problems', desc: 'errors and warnings from the Problems panel', icon: 'warning' },
           { key: 'terminal', short: 'terminal', label: 'terminal', desc: 'recent output of the active terminal', icon: 'terminal' },
           { key: 'git', short: 'git', label: 'git', desc: 'uncommitted changes (git status and diff)', icon: 'git-compare' },
+          { key: 'git:log', short: 'git:log', label: 'git:log', desc: 'recent git commits (git log)', icon: 'git-commit' },
+          { key: 'open', short: 'open', label: 'open', desc: 'list of currently open editor tabs', icon: 'files' },
           // Folders ("@src/"): omp sends the folder's file listing. Ahead of files, so "@src" offers the folder first.
           ...[...new Set(m.list.flatMap((p) => p.split('/').slice(0, -1).map((_, i, a) => a.slice(0, i + 1).join('/') + '/')))].sort()
             .map((d) => ({ key: d, short: d.split('/').at(-2) + '/', label: d.split('/').at(-2) + '/', desc: d, icon: 'folder' })),
@@ -2279,7 +2646,23 @@
       case 'plugins': showPlugins(m); break;
       case 'modelsSheet': showModelsSheet(m); break;
       case 'commandsSheet': showCommandsSheet(m); break;
+      case 'agentsSheet': showAgentsSheet(m); break;
+      case 'memorySheet': showMemorySheet(m); break;
+      case 'rulesSheet': showRulesSheet(m); break;
       case 'mcpSheet': showMcpSheet(m); break;
+      case 'reviewState': renderReviewBar(m.files); break;
+      case 'worktree': renderWorktreeBar(m); break;
+      case 'sessionSearchResults': applySessionSearch(m); break;
+      case 'keyTest': {
+        const row = sheet.querySelector(`.krow[data-key-id="${m.id}"]`);
+        if (row) {
+          const btn = row.querySelector('.kacts button');
+          if (btn) btn.disabled = false;
+          const badge = row.querySelector('.ktest') || row.querySelector('.ktext')?.appendChild(el('div', 'ktest'));
+          if (badge) { badge.className = 'ktest ' + (m.ok ? 'ok' : 'bad'); badge.textContent = m.message; }
+        }
+        break;
+      }
       case 'subagent': renderSubagent(m); break;
     }
   });
