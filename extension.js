@@ -9,6 +9,7 @@ const { OmpClient } = require('./omp-client');
 const keys = require('./keys');
 const plugins = require('./plugins');
 const review = require('./review');
+const learning = require('./learning');
 const { SubagentMap } = require('./subagent-map');
 const l10n = require('./media/l10n');
 const { PROVIDERS } = keys;
@@ -116,11 +117,16 @@ const USAGE_DAY = 'ompChat.usageDay';       // globalState: model requests sent 
 const USAGE_URL_HINT = "Gateway's usage endpoint, {key} = the key; e.g. https://zyloris.com/api/gateway/subscription/check?apiKey={key}";
 const utcDay = () => new Date().toISOString().slice(0, 10); // OpenRouter's free-model quota resets at 00:00 UTC
 
+const BUILTIN_COMMANDS = [
+  { name: 'learn', hint: '[topic]', description: 'Distill a reusable skill (SKILL.md) from this conversation' },
+  { name: 'memorize', hint: '', description: 'Extract durable project & user memory notes from this conversation' },
+];
+
 // Undo what send() prepends ("[Note: …]" lines, selection / current-file context, mentions, attachments) for display.
 function splitUserText(text) {
   let context = null;
   text = String(text || '');
-  text = text.replace(/^(\[Note: [^\n]*\]\n)+\n/, '');
+  text = text.replace(learning.NOTE_PREFIX_RE, '');
   text = text.replace(/^\[Plan mode: [^\n]*\]\n\n/, '');
   text = text.replace(/^\[Skills that may help with this request[^\n]*\]\n\n/, '');
   let m = /^\[Selection from ([^\]\n]+)\]\n```[^\n]*\n[\s\S]*?\n```\n\n/.exec(text);
@@ -137,7 +143,7 @@ function splitUserText(text) {
   }
   m = /^\[Attached files: ([^\]\n]+)\]\n\n/.exec(text);
   if (m) { files.push(...m[1].split(', ')); text = text.slice(m[0].length); }
-  while ((m = /^\[(?:Problems|Terminal output|Uncommitted changes|Git log|Open editors|Web page|Unsaved changes)[^\]\n]*\]\n```[^\n]*\n[\s\S]*?\n```\n\n/.exec(text))) {
+  while ((m = learning.CONTEXT_BLOCK_RE.exec(text))) {
     text = text.slice(m[0].length);
   }
   return { text, context, files };
@@ -483,6 +489,9 @@ class ChatProvider {
     this.turnUsage = null;       // tokens and cost summed over one agent turn
     this.sessionCost = 0;        // cumulative session cost for budget alerts
     this.budgetWarned = false;
+    this.skillDrafts = new Map();  // draftId -> parsed ```omp-skill``` payload waiting for user approval
+    this.memoryDrafts = new Map(); // draftId -> parsed ```omp-memory``` items waiting for user approval
+    this.draftSeq = 0;
     this.favChanged = false;     // true when ★ models changed since omp started
     this.quietChain = Promise.resolve();
     this.meterTimer = null;
@@ -882,7 +891,7 @@ class ChatProvider {
     this.post({ type: 'mode', mode: this.effectiveMode() });
     this.post({ type: 'model', name: this.effectiveModel() });
     this.post({ type: 'thinking_level', level: thinkingLevel(vscode.workspace.getConfiguration('ompChat')) });
-    this.post({ type: 'commands', list: this.commands });
+    this.post({ type: 'commands', list: this.allCommands() });
     this.postContext();
     this.postSession();
     this.postReview();
@@ -959,9 +968,12 @@ class ChatProvider {
       case 'editAgent': return this.editAgent(m.file);
       case 'deleteAgent': return this.deleteAgent(m.file);
       case 'memorySheet': return this.showMemory();
-      case 'addMemory': return this.addMemoryNote(m.note);
-      case 'deleteMemory': return this.deleteMemoryLine(m.index);
-      case 'openMemoryFile': return this.openMemoryFile();
+      case 'addMemory': return this.addMemoryNote(m.note, m.scope);
+      case 'deleteMemory': return this.deleteMemoryLine(m.index, m.scope);
+      case 'openMemoryFile': return this.openMemoryFile(m.scope);
+      case 'extractMemory': return this.extractMemoryFromChat();
+      case 'learnSkill': return this.learnSkillFromChat(m.topic);
+      case 'newSkill': return this.newSkill();
       case 'rulesSheet': return this.showCommandRules();
       case 'addRule': return this.addCommandRule(m.kind, m.pattern);
       case 'removeRule': return this.removeCommandRule(m.kind, m.pattern);
@@ -995,6 +1007,10 @@ class ChatProvider {
           case 'continueTurn': return this.send('Continue where you left off.');
           case 'compact': return this.send('/compact');
           case 'applyFavorites': this.favChanged = false; return this.restart();
+          case 'saveSkillDraft': return this.saveSkillDraft(m.arg);
+          case 'editSkillDraft': return this.editSkillDraft(m.arg);
+          case 'saveMemoryDraft': return this.saveMemoryDraft(m.arg);
+          case 'openMemory': return this.showMemory();
         }
         return;
       case 'setMode': return this.switchMode(m.mode);
@@ -1181,18 +1197,22 @@ class ChatProvider {
   }
 
   // "# note" (Claude Code's memory shortcut): appended to the project's AGENTS.md (or CLAUDE.md if that is what it
-  // has), which omp reads at the start of every conversation; this conversation is told right away.
-  remember(note) {
-    const dir = this.cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!dir) return this.post({ type: 'error', text: 'Open a folder first: memory is saved in its AGENTS.md.' });
-    const file = ['AGENTS.md', 'CLAUDE.md'].map((f) => path.join(dir, f)).find((f) => fs.existsSync(f)) || path.join(dir, 'AGENTS.md');
+  // has), or "#user: note" / scope='user' to global ~/.omp/agent/USER.md. This conversation is told right away.
+  remember(note, scope = 'project') {
+    const isUser = scope === 'user';
+    const file = isUser ? learning.userMemoryPath() : this.memoryFilePath();
+    if (!file) return this.post({ type: 'error', text: 'Open a folder first: memory is saved in its AGENTS.md.' });
+    let res;
     try {
-      const old = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
-      fs.appendFileSync(file, `${old && !old.endsWith('\n') ? '\n' : ''}- ${note}\n`);
+      res = learning.appendMemory(file, note);
     } catch (e) {
       return this.post({ type: 'error', text: `Could not save to ${path.basename(file)}: ${e.message}` });
     }
-    this.notes.push(`[The user added this to the project memory (${path.basename(file)}): ${note}]`);
+    if (res.duplicate) {
+      return this.post({ type: 'notice', text: `Already in ${path.basename(file)}: ${note}`, actions: [{ label: 'Open', cmd: 'openFile', arg: file }] });
+    }
+    const label = isUser ? 'user memory (global)' : 'project memory';
+    this.notes.push(`[The user added this to the ${label} (${path.basename(file)}): ${note}]`);
     this.post({ type: 'notice', text: `Saved to ${path.basename(file)}: ${note}`, actions: [{ label: 'Open', cmd: 'openFile', arg: file }] });
   }
 
@@ -1556,7 +1576,7 @@ class ChatProvider {
         break;
       case 'available_commands_update':
         this.commands = (r.commands || []).map((c) => ({ name: c.name, description: c.description || '', hint: c.input?.hint || '' }));
-        this.post({ type: 'commands', list: this.commands });
+        this.post({ type: 'commands', list: this.allCommands() });
         break;
       case 'command_output':
         if (this.quietSink) this.quietSink.push(r.text); // a command the panel ran for itself (MCP list, reload)
@@ -1590,6 +1610,7 @@ class ChatProvider {
           // Force-refresh after a turn completes so gateway/plan quota updates live (never stuck on 60s cache).
           this.refreshMeter(true);
           if (!this.replaying) this.checkClaimedFiles();
+          if (!this.replaying && this.turnText) this.checkLearningDrafts(this.turnText);
           // Plan mode: once the agent has written its plan, offer to carry it out (like Claude Code).
           if (this.wroteText && !this.replaying && this.planMode()) this.post({ type: 'planReady' });
         }
@@ -1729,9 +1750,14 @@ class ChatProvider {
       + 'for search, renames, docs, tests to fill in or small edits. In the summary, say which model did each task.';
   }
 
-  // omp keeps only one --append-system-prompt, so the step announcements and the delegation guide share it.
+  allCommands() {
+    const names = new Set(BUILTIN_COMMANDS.map((c) => c.name));
+    return [...BUILTIN_COMMANDS, ...(this.commands || []).filter((c) => !names.has(c.name))];
+  }
+
+  // omp keeps only one --append-system-prompt, so step announcements, global user memory and delegation guide share it.
   systemPromptArgs(cfg) {
-    const text = [cfg.get('announceSteps', true) && ANNOUNCE_STEPS, this.delegationGuide()].filter(Boolean).join('\n\n');
+    const text = [cfg.get('announceSteps', true) && ANNOUNCE_STEPS, learning.userMemoryPrompt(), this.delegationGuide()].filter(Boolean).join('\n\n');
     return text ? [`--append-system-prompt=${text}`] : [];
   }
 
@@ -1985,52 +2011,196 @@ class ChatProvider {
     return this.showAgents(`Deleted subagent "${a.name}" (moved to the trash).`);
   }
 
-  // ---- project memory manager (AGENTS.md / CLAUDE.md) ----
-  memoryFilePath() {
+  // ---- project & global memory manager (AGENTS.md / CLAUDE.md + ~/.omp/agent/USER.md) ----
+  memoryFilePath(scope = 'project') {
+    if (scope === 'user') return learning.userMemoryPath();
     const dir = this.cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!dir) return null;
-    return ['AGENTS.md', 'CLAUDE.md'].map((f) => path.join(dir, f)).find((f) => fs.existsSync(f)) || path.join(dir, 'AGENTS.md');
+    return learning.projectMemoryPath(dir);
   }
 
   async showMemory(note) {
     await this.reveal();
-    const file = this.memoryFilePath();
-    if (!file) return this.post({ type: 'error', text: 'Open a folder first: memory is saved in its AGENTS.md.' });
-    let items = [];
-    if (fs.existsSync(file)) {
-      try {
-        const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
-        items = lines.map((line, index) => ({ index, text: line })).filter((x) => x.text.trim());
-      } catch {}
-    }
-    this.post({ type: 'memorySheet', file: path.basename(file), fullPath: file, items, note: note || '' });
+    const projFile = this.memoryFilePath('project');
+    const userFile = this.memoryFilePath('user');
+    const project = projFile ? { file: path.basename(projFile), fullPath: projFile, items: learning.readMemoryItems(projFile) } : null;
+    const user = { file: path.basename(userFile), fullPath: userFile, items: learning.readMemoryItems(userFile) };
+    this.post({
+      type: 'memorySheet',
+      file: project ? project.file : user.file,
+      fullPath: project ? project.fullPath : user.fullPath,
+      items: project ? project.items : user.items,
+      project,
+      user,
+      note: note || '',
+    });
   }
 
-  async addMemoryNote(note) {
+  async addMemoryNote(note, scope = 'project') {
     const text = String(note || '').trim();
     if (!text) return this.showMemory();
-    this.remember(text);
+    const targetScope = scope === 'user' || !this.memoryFilePath('project') ? 'user' : 'project';
+    this.remember(text, targetScope);
     return this.showMemory(`Saved: ${text}`);
   }
 
-  async deleteMemoryLine(index) {
-    const file = this.memoryFilePath();
+  async deleteMemoryLine(index, scope = 'project') {
+    const file = this.memoryFilePath(scope === 'user' ? 'user' : 'project');
     if (!file || !fs.existsSync(file)) return this.showMemory();
     try {
-      const lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
-      if (index >= 0 && index < lines.length) {
-        lines.splice(index, 1);
-        fs.writeFileSync(file, lines.join('\n'));
-      }
+      learning.deleteMemoryLine(file, index);
     } catch (e) { return this.showMemory(`Could not update ${path.basename(file)}: ${e.message}`); }
     return this.showMemory();
   }
 
-  async openMemoryFile() {
-    const file = this.memoryFilePath();
+  async openMemoryFile(scope = 'project') {
+    const file = this.memoryFilePath(scope === 'user' ? 'user' : 'project');
     if (!file) return;
-    if (!fs.existsSync(file)) { try { fs.writeFileSync(file, ''); } catch {} }
+    if (!fs.existsSync(file)) {
+      try { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, ''); } catch {}
+    }
     await vscode.window.showTextDocument(vscode.Uri.file(file), { preview: false });
+  }
+
+  // ---- self-learning: skill distillation (/learn), manual skill creation & memory extraction (/memorize) ----
+  async learnSkillFromChat(topic = '') {
+    await this.reveal();
+    return this.send(learning.learnSkillPrompt(topic), false);
+  }
+
+  async extractMemoryFromChat() {
+    await this.reveal();
+    return this.send(learning.EXTRACT_MEMORY_PROMPT, false);
+  }
+
+  async newSkill(draft = null) {
+    const v = await this.ask({
+      title: draft ? 'Edit & save skill' : 'New skill',
+      text: 'Skills are SKILL.md files auto-picked when relevant to your message.',
+      fields: [
+        { name: 'name', label: 'Name', placeholder: 'e.g. fix-vite-proxy', value: draft?.name || '', required: true },
+        { name: 'description', label: 'Description (triggers auto-pick)', placeholder: 'When to use this skill', value: draft?.description || '', required: true },
+        { name: 'scope', label: 'Save for', type: 'select', value: draft?.scope || (this.cwd ? 'project' : 'user'),
+          options: [
+            ...(this.cwd ? [{ value: 'project', label: 'This project (.omp/skills)' }] : []),
+            { value: 'user', label: 'All projects (~/.omp/agent/skills)' },
+          ] },
+        { name: 'body', label: 'Instructions (Markdown)', type: 'textarea', required: true,
+          value: draft?.body || '',
+          placeholder: '# Steps\n1. Check...\n2. Verify...' },
+      ],
+      submit: 'Save skill', cancel: 'Cancel',
+    });
+    if (!v) return;
+    return this.writeSkill({ name: v.name, description: v.description, body: v.body, scope: v.scope });
+  }
+
+  // Saves SKILL.md; an existing skill of the same name is only replaced after a modal confirm. Returns true when saved.
+  async writeSkill(skill) {
+    let res;
+    try {
+      try {
+        res = learning.saveSkillFile({ ...skill, cwd: this.cwd });
+      } catch (e) {
+        if (e.code !== 'EEXIST') throw e;
+        const yes = this.t('Overwrite');
+        const pick = await vscode.window.showWarningMessage(this.t('A skill with this name already exists. Overwrite it?'), { modal: true, detail: e.file }, yes);
+        if (pick !== yes) return false;
+        res = learning.saveSkillFile({ ...skill, cwd: this.cwd, overwrite: true });
+      }
+    } catch (e) {
+      this.post({ type: 'error', text: `Could not save skill: ${e.message}` });
+      return false;
+    }
+    this.skillsCache = null;
+    await this.reloadCommands();
+    this.post({
+      type: 'notice',
+      text: `Saved skill "${res.name}" (${res.scope === 'user' ? 'all projects' : 'this project'}).`,
+      actions: [{ label: 'Open', cmd: 'openFile', arg: res.file }],
+    });
+    return true;
+  }
+
+  checkLearningDrafts(text) {
+    const skill = learning.parseSkillDraft(text);
+    if (skill) {
+      const id = 'sd' + ++this.draftSeq;
+      this.skillDrafts.set(id, skill);
+      if (this.skillDrafts.size > 10) this.skillDrafts.delete(this.skillDrafts.keys().next().value);
+      this.post({
+        type: 'notice',
+        text: `Skill draft ready: ${skill.name} (${skill.scope === 'user' ? 'all projects' : 'this project'})`,
+        actions: [
+          ...(this.cwd ? [{ label: 'Save to project', cmd: 'saveSkillDraft', arg: `${id}:project` }] : []),
+          { label: 'Save globally', cmd: 'saveSkillDraft', arg: `${id}:user` },
+          { label: 'Edit & save…', cmd: 'editSkillDraft', arg: id },
+        ],
+      });
+    }
+    if (!text.includes('omp-memory')) return;
+    const read = (f) => { try { return f && fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : ''; } catch { return ''; } };
+    const mems = learning.parseMemoryDraft(text, read(this.memoryFilePath('project')), read(this.memoryFilePath('user')));
+    if (mems !== null) {
+      if (!mems.length) {
+        this.post({ type: 'notice', text: 'No new memory notes found (everything is already saved or one-off).' });
+      } else {
+        const id = 'md' + ++this.draftSeq;
+        this.memoryDrafts.set(id, mems);
+        if (this.memoryDrafts.size > 10) this.memoryDrafts.delete(this.memoryDrafts.keys().next().value);
+        const preview = mems.map((x) => `[${x.scope === 'user' ? 'user' : 'project'}] ${x.text}`).join(' · ');
+        this.post({
+          type: 'notice',
+          text: `Extracted ${mems.length} memory note${mems.length > 1 ? 's' : ''}: ${preview.slice(0, 220)}${preview.length > 220 ? '…' : ''}`,
+          actions: [
+            { label: 'Save all', cmd: 'saveMemoryDraft', arg: id },
+            { label: 'Open Memory', cmd: 'openMemory' },
+          ],
+        });
+      }
+    }
+  }
+
+  async saveSkillDraft(arg) {
+    const [id, scopeOverride] = String(arg || '').split(':');
+    const draft = this.skillDrafts.get(id);
+    if (!draft) return this.post({ type: 'error', text: 'Skill draft expired. Run /learn again to regenerate it.' });
+    if (await this.writeSkill({ ...draft, scope: scopeOverride || draft.scope })) this.skillDrafts.delete(id);
+  }
+
+  async editSkillDraft(id) {
+    const draft = this.skillDrafts.get(String(id || ''));
+    if (!draft) return this.post({ type: 'error', text: 'Skill draft expired. Run /learn again to regenerate it.' });
+    return this.newSkill(draft);
+  }
+
+  async saveMemoryDraft(id) {
+    const items = this.memoryDrafts.get(String(id || ''));
+    if (!items?.length) return this.post({ type: 'error', text: 'Memory draft expired. Run /memorize again.' });
+    let saved = 0;
+    for (const it of items) {
+      const scope = it.scope === 'user' || !this.memoryFilePath('project') ? 'user' : 'project';
+      const file = this.memoryFilePath(scope);
+      if (!file) continue;
+      try {
+        const res = learning.appendMemory(file, it.text);
+        if (res.added) {
+          saved++;
+          const label = scope === 'user' ? 'user memory (global)' : 'project memory';
+          this.notes.push(`[The user added this to the ${label} (${path.basename(file)}): ${it.text}]`);
+        }
+      } catch {}
+    }
+    this.memoryDrafts.delete(String(id || ''));
+    this.post({
+      type: 'notice',
+      text: saved ? `Saved ${saved} memory note${saved > 1 ? 's' : ''}.` : 'All extracted notes were already saved.',
+      actions: [{ label: 'Open Memory', cmd: 'openMemory' }],
+    });
+  }
+
+  recallPastSessions(query, promptText) {
+    const dir = this.sessionDir || (this.sessionFile ? path.dirname(this.sessionFile) : null);
+    return learning.recallSessions({ sessionDir: dir, currentFile: this.sessionFile, query, promptText });
   }
 
   // ---- allowed & denied shell command rules ----
@@ -2463,6 +2633,14 @@ class ChatProvider {
     if (/(^|\s)@git:log\b/.test(text)) blocks.push(await this.gitLog());
     if (/(^|\s)@git(?:\b(?!:))/.test(text)) blocks.push(await this.gitChanges());
     if (/(^|\s)@open\b/.test(text)) blocks.push(this.openEditorsContext());
+    const histMatches = [...text.matchAll(/(?:^|\s)@history(?::([^\s]+))?(?=[\s),.;!?]|$)/g)];
+    if (histMatches.length) {
+      const queries = [...new Set(histMatches.map((m) => (m[1] || '').replace(/[),.;:!?\]]+$/, '').trim()))];
+      for (const q of queries.slice(0, 2)) {
+        const recalled = this.recallPastSessions(q, text);
+        blocks.push(fence(q ? `Past sessions matching "${q}"` : 'Past sessions matching this request', recalled.text));
+      }
+    }
     const urls = [...new Set([...text.matchAll(/(?:^|\s)@(https?:\/\/[^\s<>"']+)/g)].map((m) => m[1].replace(/[),.;:!?\]]+$/, '')))];
     for (const url of urls.slice(0, 3)) blocks.push(await fetchPage(url));
     return blocks;
@@ -2837,7 +3015,10 @@ class ChatProvider {
     let client = await this.ensureClient();
     if (!client) { this.post({ type: 'idle' }); return; }
     if (/^!\s*\S/.test(text)) return this.runShell(text.replace(/^!\s*/, ''));
-    if (/^#(?!#)\s*\S/.test(text) && !text.includes('\n')) return this.remember(text.replace(/^#\s*/, '')); // one line only
+    if (/^#(?:user|global):\s*\S/i.test(text) && !text.includes('\n')) return this.remember(text.replace(/^#(?:user|global):\s*/i, ''), 'user');
+    if (/^#(?!#)\s*\S/.test(text) && !text.includes('\n')) return this.remember(text.replace(/^#\s*/, ''), 'project'); // one line only
+    if (/^\/learn(?:\s+([\s\S]*))?$/i.test(text)) return this.learnSkillFromChat(text.replace(/^\/learn\s*/i, ''));
+    if (/^\/memorize(?:\s|$)/i.test(text)) return this.extractMemoryFromChat();
     const isCommand = text.startsWith('/'); // slash commands must reach omp verbatim
     const ctx = withContext && !isCommand ? this.contextInfo() : null;
     const pinned = isCommand ? [] : this.pinned.filter((rel) => rel !== ctx?.rel);
@@ -3315,6 +3496,8 @@ function activate(context) {
     vscode.commands.registerCommand('ompChat.commands', () => current().showCommands()),
     vscode.commands.registerCommand('ompChat.agents', () => current().showAgents()),
     vscode.commands.registerCommand('ompChat.memory', () => current().showMemory()),
+    vscode.commands.registerCommand('ompChat.learnSkill', () => current().learnSkillFromChat()),
+    vscode.commands.registerCommand('ompChat.extractMemory', () => current().extractMemoryFromChat()),
     vscode.commands.registerCommand('ompChat.commandRules', () => current().showCommandRules()),
     vscode.commands.registerCommand('ompChat.mcp', () => current().showMcp()),
     vscode.commands.registerCommand('ompChat.inlineEdit', () => current().inlineEdit()),

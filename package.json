@@ -147,6 +147,16 @@
         "category": "OMP Chat"
       },
       {
+        "command": "ompChat.learnSkill",
+        "title": "%command.learnSkill%",
+        "category": "OMP Chat"
+      },
+      {
+        "command": "ompChat.extractMemory",
+        "title": "%command.extractMemory%",
+        "category": "OMP Chat"
+      },
+      {
         "command": "ompChat.commandRules",
         "title": "%command.commandRules%",
         "category": "OMP Chat"

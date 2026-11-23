@@ -918,6 +918,17 @@
     autoCard.append(autoText, auto.label);
     s.appendChild(autoCard);
 
+    const skillActions = el('div', 'sactions');
+    const learnBtn = el('button', 'secondary');
+    learnBtn.append(icon('sparkle'), el('span', '', 'Learn from chat'));
+    learnBtn.title = 'Distill a reusable skill (SKILL.md) from this conversation (/learn)';
+    learnBtn.onclick = () => { closeSheet(); vscode.postMessage({ type: 'learnSkill' }); };
+    const newSkillBtn = el('button', 'secondary');
+    newSkillBtn.append(icon('add'), el('span', '', 'New skill…'));
+    newSkillBtn.onclick = () => { closeSheet(); vscode.postMessage({ type: 'newSkill' }); };
+    skillActions.append(learnBtn, newSkillBtn);
+    s.appendChild(skillActions);
+
     const fbox = el('div', 'pfilterwrap');
     const filter = el('input', 'finput pfilterbox');
     filter.placeholder = 'Filter plugins and skills';
@@ -1325,42 +1336,61 @@
     }
   }
 
-  // ---- Project memory manager (AGENTS.md / CLAUDE.md) ----
+  // ---- Project & global memory manager (AGENTS.md / CLAUDE.md + ~/.omp/agent/USER.md) ----
   function showMemorySheet(m) {
-    const s = openSheet(`Memory · ${m.file}`, 'bookmark', () => vscode.postMessage({ type: 'memorySheet' }));
+    const s = openSheet('Memory', 'bookmark', () => vscode.postMessage({ type: 'memorySheet' }));
     s.classList.add('lists');
     const bar0 = el('div', 'sintro');
-    const openBtn = el('button', 'secondary');
-    openBtn.append(icon('go-to-file'), el('span', '', 'Open file'));
-    openBtn.onclick = () => vscode.postMessage({ type: 'openMemoryFile' });
-    bar0.append(el('span', 'unote', 'Notes read by the agent at the start of every chat. You can also type # note in the message box.'), openBtn);
+    const extractBtn = el('button', 'secondary');
+    extractBtn.append(icon('sparkle'), el('span', '', 'Extract from chat'));
+    extractBtn.title = 'Ask the agent to extract durable lessons from this conversation (/memorize)';
+    extractBtn.onclick = () => { closeSheet(); vscode.postMessage({ type: 'extractMemory' }); };
+    bar0.append(el('span', 'unote', 'Notes read by the agent in every chat. Type # note for project or #user: note for global.'), extractBtn);
     s.appendChild(bar0);
     if (m.note) s.appendChild(el('div', 'unote snote', m.note));
     const addRow = el('div', 'ruleadd');
+    const scopeSel = el('select', 'finput mscope');
+    if (m.project) scopeSel.appendChild(new Option('Project', 'project'));
+    scopeSel.appendChild(new Option('Global', 'user'));
     const inp = el('input', 'finput');
-    inp.placeholder = 'Add a project memory note (e.g. use pnpm, not npm)';
+    inp.placeholder = 'Add a memory note (e.g. use pnpm, not npm)';
     const addBtn = el('button', 'primary', 'Add');
-    const submit = () => { if (inp.value.trim()) { vscode.postMessage({ type: 'addMemory', note: inp.value.trim() }); inp.value = ''; } };
+    const submit = () => {
+      if (!inp.value.trim()) return;
+      vscode.postMessage({ type: 'addMemory', note: inp.value.trim(), scope: scopeSel.value });
+      inp.value = '';
+    };
     inp.onkeydown = (e) => { if (e.key === 'Enter') submit(); };
     addBtn.onclick = submit;
-    addRow.append(inp, addBtn);
+    addRow.append(scopeSel, inp, addBtn);
     s.appendChild(addRow);
     const scroll = el('div', 'kscroll');
     s.appendChild(scroll);
-    if (m.items?.length) {
-      const card = el('div', 'kcard');
-      for (const it of m.items) {
-        card.appendChild(listRow({
-          title: it.text,
-          actions: [confirmButton('Delete?', 'trash', 'Remove this line', () => vscode.postMessage({ type: 'deleteMemory', index: it.index }))],
-        }));
+
+    const sections = [
+      ...(m.project ? [{ scope: 'project', title: `Project memory (${m.project.file})`, empty: 'No project memory notes yet.', data: m.project }] : []),
+      ...(m.user ? [{ scope: 'user', title: `Global user memory (${m.user.file})`, empty: 'No global user notes yet. Preferences saved here follow you across all projects.', data: m.user }] : []),
+    ];
+    for (const sec of sections) {
+      const head = el('div', 'mhead');
+      head.append(el('div', 'ush', `${sec.title} · ${sec.data.items.length}`));
+      const openBtn = el('button', 'secondary');
+      openBtn.append(icon('go-to-file'), el('span', '', 'Open file'));
+      openBtn.onclick = () => vscode.postMessage({ type: 'openMemoryFile', scope: sec.scope });
+      head.appendChild(openBtn);
+      scroll.appendChild(head);
+      if (sec.data.items.length) {
+        const card = el('div', 'kcard');
+        for (const it of sec.data.items) {
+          card.appendChild(listRow({
+            title: it.text,
+            actions: [confirmButton('Delete?', 'trash', 'Remove this line', () => vscode.postMessage({ type: 'deleteMemory', index: it.index, scope: sec.scope }))],
+          }));
+        }
+        scroll.appendChild(card);
+      } else {
+        scroll.appendChild(el('div', 'unote', sec.empty));
       }
-      scroll.appendChild(card);
-    } else {
-      const empty = el('div', 'sempty');
-      empty.append(icon('bookmark'), el('div', '', 'No memory notes yet.'),
-        el('div', 'unote', 'Add project conventions, build commands or rules here so the agent follows them automatically.'));
-      scroll.appendChild(empty);
     }
   }
 
@@ -2613,6 +2643,7 @@
           { key: 'git', short: 'git', label: 'git', desc: 'uncommitted changes (git status and diff)', icon: 'git-compare' },
           { key: 'git:log', short: 'git:log', label: 'git:log', desc: 'recent git commits (git log)', icon: 'git-commit' },
           { key: 'open', short: 'open', label: 'open', desc: 'list of currently open editor tabs', icon: 'files' },
+          { key: 'history', short: 'history', label: 'history', desc: 'relevant excerpts from past conversations (@history or @history:topic)', icon: 'history' },
           // Folders ("@src/"): omp sends the folder's file listing. Ahead of files, so "@src" offers the folder first.
           ...[...new Set(m.list.flatMap((p) => p.split('/').slice(0, -1).map((_, i, a) => a.slice(0, i + 1).join('/') + '/')))].sort()
             .map((d) => ({ key: d, short: d.split('/').at(-2) + '/', label: d.split('/').at(-2) + '/', desc: d, icon: 'folder' })),
