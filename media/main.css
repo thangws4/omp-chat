@@ -1237,6 +1237,12 @@ button.send .codicon { font-size: 14px; }
 .sbtns { display: inline-flex; gap: 6px; flex: none; }
 .ruleadd { display: flex; gap: 6px; margin: 6px 0 8px; }
 .ruleadd .finput { flex: 1; }
+.ruleadd .mscope { flex: 0 0 auto; width: auto; min-width: 88px; }
+.mhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; }
+.mhead .ush { margin: 0; }
+.mhead button.secondary { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; font-size: .86em; }
+.sactions { display: flex; gap: 6px; margin: 6px 0 2px; flex-wrap: wrap; }
+.sactions button.secondary { display: inline-flex; align-items: center; gap: 5px; }
 .ktest { font-size: .84em; margin-top: 3px; color: var(--vscode-descriptionForeground); }
 .ktest.ok { color: var(--omp-ok); }
 .ktest.bad { color: var(--omp-err); }
