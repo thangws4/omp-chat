@@ -1023,6 +1023,8 @@
 
   // ---- Models sheet: every model omp can run; ★ the ones you use and only those show in the chat's picker ----
   let modelFilter = (vscode.getState() || {}).modelFilter || ''; // kept across re-renders and reloads
+  let modelProvider = (vscode.getState() || {}).modelProvider || ''; // provider filter of All models ('' = every one)
+  let favOpen = (vscode.getState() || {}).favOpen !== false; // Your models expanded or folded
   let modelFocus = null; // { id, fav } of the focused row, refocused when the sheet is re-sent (reordering)
   const SHEET_LIMIT = 150;
   function showModelsSheet(m) {
@@ -1080,7 +1082,7 @@
       return r;
     };
 
-    const favBox = s.appendChild(el('div', 'usec'));
+    const favBox = s.appendChild(el('div', 'usec mfavbox'));
     const allBox = s.appendChild(el('div', 'usec'));
     const filter = el('input', 'finput pfilterbox');
     filter.placeholder = 'Filter all models, e.g. "deepseek", "kimi"';
@@ -1094,29 +1096,49 @@
       c.onclick = () => { filter.value = filter.value.toLowerCase() === q ? '' : q; renderAll(); filter.focus(); };
       quick.appendChild(c);
     }
+    // Provider filter: the part of the id before the first "/", with how many models each has.
+    const counts = new Map();
+    for (const x of m.all || []) { const p = x.id.split('/')[0]; counts.set(p, (counts.get(p) || 0) + 1); }
+    const prov = el('select', 'finput mprov');
+    prov.title = 'Show one provider\'s models';
+    prov.append(new Option(`All providers (${(m.all || []).length})`, ''));
+    for (const [p, n] of [...counts].sort((a, b) => a[0].localeCompare(b[0]))) prov.append(new Option(`${p} (${n})`, p));
+    prov.value = counts.has(modelProvider) ? modelProvider : '';
+    prov.onchange = renderAll;
+    quick.appendChild(prov);
     const list = el('div', 'mlist kcard');
 
+    // Your models scroll on their own and fold away, so a long list never squeezes All models.
     function renderFav() {
       favBox.textContent = '';
-      favBox.appendChild(el('div', 'ush', `Your models · ${fav.length}`));
-      const card = el('div', 'kcard');
+      const head = el('button', 'ush mfavhead', `Your models · ${fav.length}`);
+      head.prepend(icon(favOpen ? 'chevron-down' : 'chevron-right'));
+      head.setAttribute('aria-expanded', String(favOpen));
+      head.title = favOpen ? 'Fold your models' : 'Show your models';
+      head.onclick = () => { favOpen = !favOpen; saveState({ favOpen }); renderFav(); };
+      favBox.appendChild(head);
+      if (!favOpen) return;
+      const card = el('div', 'kcard mfav');
       fav.forEach((id, i) => card.appendChild(row(byId.get(id) || { id }, true, i, fav.length)));
       if (fav.length) favBox.appendChild(card);
       else note(favBox, 'None yet. Star (☆) models below; they will be the ones offered in the chat.');
     }
     function renderAll() {
       modelFilter = filter.value;
-      try { vscode.setState({ ...(vscode.getState() || {}), modelFilter }); } catch { /* state is a convenience */ }
+      modelProvider = prov.value;
+      saveState({ modelFilter, modelProvider });
       const q = filter.value.toLowerCase().trim();
-      const match = (x) => !q || x.id.toLowerCase().includes(q) || (x.name || '').toLowerCase().includes(q)
-        || (q === 'free' && x.free) || ((q === 'go' || q === 'go plan') && x.plan) || (q === 'images' && x.vision);
-      for (const c of quick.children) c.classList.toggle('on', c.dataset.q === q);
+      const match = (x) => (!modelProvider || x.id.startsWith(modelProvider + '/'))
+        && (!q || x.id.toLowerCase().includes(q) || (x.name || '').toLowerCase().includes(q)
+        || (q === 'free' && x.free) || ((q === 'go' || q === 'go plan') && x.plan) || (q === 'images' && x.vision));
+      for (const c of quick.querySelectorAll('.chip')) c.classList.toggle('on', c.dataset.q === q);
       const items = (m.all || []).filter(match);
       list.textContent = '';
       items.slice(0, SHEET_LIMIT).forEach((x) => list.appendChild(row(x, false)));
       if (!items.length) note(list, 'No model matches.');
       else if (items.length > SHEET_LIMIT) note(list, `Showing ${SHEET_LIMIT} of ${items.length}. Type to narrow it down.`);
-      allBox.firstChild.textContent = `All models · ${(m.all || []).length}`;
+      const total = (m.all || []).length;
+      allBox.firstChild.textContent = `All models · ${items.length === total ? total : `${items.length} of ${total}`}`;
     }
     function toggle(id) { // instant here; the extension stores it
       const i = fav.indexOf(id);

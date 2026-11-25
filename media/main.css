@@ -698,7 +698,18 @@ details > summary::-webkit-details-marker { display: none; }
 #sheet.models { max-height: 82%; display: flex; flex-direction: column; }
 #sheet.models .usec:last-child { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 #sheet.models .usec .kcard { margin: 5px 0 0; }
-.mlist { overflow-y: auto; min-height: 80px; }
+.mlist { overflow-y: auto; min-height: min(220px, 34vh); }
+/* Your models: their own scroll and a fold, so many starred models never squeeze All models */
+/* In a short panel Your models gives way (down to its title and a row or two), All models keeps room. */
+#sheet.models .mfavbox { display: flex; flex-direction: column; flex: 0 1 auto; min-height: 0; }
+#sheet.models .mfavbox:has(.mfav) { min-height: min(124px, 12vh); }
+#sheet.models .mfav { flex: 0 1 auto; max-height: min(232px, 30vh); min-height: 0; overflow-y: auto; }
+#sheet.models .mfavhead { flex: none; }
+#sheet.models .usec:last-child { min-height: min(280px, 36vh); }
+.mfavhead { display: flex; align-items: center; gap: 4px; padding: 2px 4px 2px 0; border-radius: 4px; }
+.mfavhead:hover { color: var(--vscode-foreground); }
+.mfavhead .codicon { font-size: 12px; }
+.mquick .mprov { margin-left: auto; width: auto; max-width: 55%; padding: 1px 6px; font-size: .84em; }
 .mrow .mstar { flex: none; }
 .mrow .mstar.on .codicon { color: var(--omp-warn); }
 .mrow .pbadge { flex: none; font-size: .78em; font-weight: 500; padding: 1px 7px; border-radius: 999px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
