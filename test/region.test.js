@@ -1,7 +1,7 @@
 const Module = require('module'); const assert = require('assert');
 let provider;
 const vs = { Uri: { joinPath: () => ({}) }, workspace: { getConfiguration: () => ({ get: (k, d) => d }), onDidChangeConfiguration: () => ({}), registerTextDocumentContentProvider: () => ({}) },
-  window: { registerWebviewViewProvider: (id, p) => { provider = p; return {}; }, onDidChangeActiveTextEditor: () => ({}), onDidChangeTextEditorSelection: () => ({}) }, CodeActionKind: { QuickFix: 'quickfix' }, CodeAction: class {}, languages: { registerCodeActionsProvider: () => ({}), getDiagnostics: () => [] }, commands: { registerCommand: () => ({}) } };
+  window: { registerWebviewViewProvider: (id, p) => { if (id === 'ompChat.view') provider = p; return {}; }, onDidChangeActiveTextEditor: () => ({}), onDidChangeTextEditorSelection: () => ({}) }, CodeActionKind: { QuickFix: 'quickfix' }, CodeAction: class {}, languages: { registerCodeActionsProvider: () => ({}), getDiagnostics: () => [] }, commands: { registerCommand: () => ({}) } };
 const orig = Module._load; Module._load = function (r, ...a) { return r === 'vscode' ? vs : orig.call(this, r, ...a); };
 require('../extension.js').activate({ subscriptions: [], extensionUri: {}, secrets: {}, globalState: { get() {}, update: async () => {} } });
 const posts = []; provider.post = (m) => posts.push(m); provider.refreshMeter = () => {};

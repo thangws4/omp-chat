@@ -2,7 +2,7 @@ const Module = require('module'); const assert = require('assert');
 let provider; let editor;
 const vs = { Uri: { joinPath: () => ({}) },
   workspace: { getConfiguration: () => ({ get: (k, d) => d }), asRelativePath: (u) => u.path, onDidChangeConfiguration: () => ({}), registerTextDocumentContentProvider: () => ({}) },
-  window: { registerWebviewViewProvider: (id, p) => { provider = p; return {}; }, onDidChangeActiveTextEditor: () => ({}), onDidChangeTextEditorSelection: () => ({}),
+  window: { registerWebviewViewProvider: (id, p) => { if (id === 'ompChat.view') provider = p; return {}; }, onDidChangeActiveTextEditor: () => ({}), onDidChangeTextEditorSelection: () => ({}),
     get activeTextEditor() { return editor; } },
   CodeActionKind: { QuickFix: 'quickfix' }, CodeAction: class {}, languages: { registerCodeActionsProvider: () => ({}), getDiagnostics: () => [] }, commands: { registerCommand: () => ({}) } };
 const orig = Module._load; Module._load = function (r, ...a) { return r === 'vscode' ? vs : orig.call(this, r, ...a); };

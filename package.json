@@ -42,6 +42,13 @@
           "id": "ompChat.view",
           "name": "%view.chat%"
         }
+      ],
+      "explorer": [
+        {
+          "type": "webview",
+          "id": "ompChat.pet",
+          "name": "Victor"
+        }
       ]
     },
     "commands": [

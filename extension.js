@@ -11,6 +11,7 @@ const plugins = require('./plugins');
 const review = require('./review');
 const learning = require('./learning');
 const { SubagentMap } = require('./subagent-map');
+const { PetView } = require('./pet');
 const l10n = require('./media/l10n');
 const { PROVIDERS } = keys;
 
@@ -81,6 +82,7 @@ const TAB_TYPE = 'ompChat.tab';
 
 // Every open chat (the sidebar's and each tab's), like herdr's panes: one status bar item sums them up.
 const chats = new Set();
+let petView = null; // Victor's Explorer view
 let statusItem = null;
 const byStatus = () => [...chats].map((c) => ({ c, s: c.agentStatus() })).sort((a, b) => STATUS_RANK[b.s] - STATUS_RANK[a.s]);
 function refreshStatusBar() {
@@ -585,6 +587,7 @@ class ChatProvider {
 
   post(msg) {
     if (this.view) this.view.webview.postMessage(msg);
+    if (msg.type === 'meter') petView?.meter(this, msg);
     if (STATUS_EVENTS.has(msg.type)) this.onStatusEvent(msg.type);
   }
 
@@ -3454,10 +3457,12 @@ function activate(context) {
     context.subscriptions.push(statusItem);
   }
   review.register(context, (s) => provider.t(s));
+  petView = new PetView(context, (last) => (chats.has(last) ? last : current()));
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider('ompChat.view', provider, {
       webviewOptions: { retainContextWhenHidden: true },
     }),
+    vscode.window.registerWebviewViewProvider('ompChat.pet', petView),
     // Tabs come back after a reload with their conversation (and worktree), kept in the tab's webview state.
     vscode.window.registerWebviewPanelSerializer?.(TAB_TYPE, {
       async deserializeWebviewPanel(panel, state) {

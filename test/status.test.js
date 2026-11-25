@@ -2,7 +2,7 @@ const Module = require('module'); const assert = require('assert');
 let provider; const item = { shown: false, show() { this.shown = true; }, hide() { this.shown = false; } };
 const vs = { ThemeColor: class { constructor(id) { this.id = id; } }, StatusBarAlignment: { Left: 1 }, Uri: { joinPath: () => ({}) },
   workspace: { getConfiguration: () => ({ get: (k, d) => d }), onDidChangeConfiguration: () => ({}), registerTextDocumentContentProvider: () => ({}) },
-  window: { registerWebviewViewProvider: (id, p) => { provider = p; return {}; }, onDidChangeActiveTextEditor: () => ({}), onDidChangeTextEditorSelection: () => ({}), createStatusBarItem: () => item },
+  window: { registerWebviewViewProvider: (id, p) => { if (id === 'ompChat.view') provider = p; return {}; }, onDidChangeActiveTextEditor: () => ({}), onDidChangeTextEditorSelection: () => ({}), createStatusBarItem: () => item },
   CodeActionKind: { QuickFix: 'quickfix' }, CodeAction: class {}, languages: { registerCodeActionsProvider: () => ({}), getDiagnostics: () => [] }, commands: { registerCommand: () => ({}) } };
 const orig = Module._load; Module._load = function (r, ...a) { return r === 'vscode' ? vs : orig.call(this, r, ...a); };
 require('../extension.js').activate({ subscriptions: [], extensionUri: {}, secrets: {}, globalState: { get() {}, update: async () => {} } });
