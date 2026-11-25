@@ -23,7 +23,7 @@ Powered by the open-source [oh-my-pi](https://github.com/can1357/oh-my-pi) agent
 
 | | |
 |---|---|
-| **Works with your keys** | OpenCode, OpenRouter, DeepSeek, Anthropic, OpenAI, Gemini, xAI, Mistral, Groq, Moonshot, Z.ai, or any compatible endpoint. Several keys per provider, switched automatically when one hits its limit |
+| **Works with your keys** | OpenCode, OpenRouter, DeepSeek, Anthropic, OpenAI, Gemini, xAI, Mistral, Groq, Moonshot, Z.ai, Command Code, or any compatible endpoint. Several keys per provider, switched automatically when one hits its limit |
 | **Safe by default** | Asks before it edits files or runs commands; four approval modes plus a read-only **Plan** mode |
 | **Reviewable changes** | Inline diffs for every changed file, **Undo**, and **Accept** / **Reject** per change in the editor |
 | **Context in one keystroke** | The open file or selection goes with your message; `@` mentions files, folders, `@git`, `@problems`, `@terminal`, URLs; paste or drop images |
@@ -130,6 +130,7 @@ Have a ChatGPT, Claude or Copilot plan instead of a key? **…** → **Sign in w
 | **Groq** | Fast open models, free tier available | [console.groq.com](https://console.groq.com/keys) |
 | **Moonshot** | Kimi models, pay per token | [platform.moonshot.ai](https://platform.moonshot.ai/console/api-keys) |
 | **Z.ai** | GLM models | [z.ai](https://z.ai/manage-apikey/apikey-list) |
+| **Command Code** | Open + closed models at provider price, a few `:free` | [commandcode.ai/studio](https://commandcode.ai/studio) |
 
 **Base URL (optional).** Fill it in to send that key's requests to a proxy, gateway or other compatible endpoint (for example `https://my-proxy.example.com/v1`) instead of the provider's own. It belongs to the key: it applies while that key is active, and the key list shows it next to the key. To change or clear it later, use the 🌐 button on the key in the key list.
 

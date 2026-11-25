@@ -29,6 +29,8 @@ const PROVIDERS = [
     url: 'https://platform.moonshot.ai/console/api-keys', prefix: 'moonshot/', defaultModel: 'moonshot/kimi-k3' },
   { label: 'Z.ai', description: 'GLM models, cheap subscription or pay per token', env: 'ZAI_API_KEY',
     url: 'https://z.ai/manage-apikey/apikey-list', prefix: 'zai/', defaultModel: 'zai/glm-5.1' },
+  { label: 'Command Code', description: 'open + closed models at provider price, a few :free', env: 'COMMAND_CODE_API_KEY',
+    url: 'https://commandcode.ai/studio', prefix: 'commandcode/', defaultModel: 'commandcode/deepseek/deepseek-v4.1-flash' },
   { label: 'Ollama (Local)', description: 'local models via Ollama (no API key needed)', env: 'OLLAMA_API_KEY',
     url: 'https://ollama.com', prefix: 'ollama/', defaultModel: 'ollama/qwen2.5-coder:latest',
     optionalKey: true, defaultBaseUrl: 'http://localhost:11434/v1' },
@@ -141,6 +143,22 @@ function flatten(o, pre = '', out = []) {
   return out;
 }
 
+// Command Code's { credits: {monthly|purchased|freeCredits, planId}, windowLimits: {fiveHour|weekly: {used, cap, resetAt, exceeded}} }
+// in the shapes the panel already draws: OpenCode Go's plan windows and DeepSeek's balance line.
+function commandCodeAccount(c) {
+  const at = (t) => { const n = Number(t); return n > 0 ? new Date(n < 1e12 ? n * 1000 : n).toISOString() : t; }; // seconds or ms
+  const win = (w) => (w && w.cap > 0 && Number.isFinite(w.used)
+    ? { status: w.exceeded ? 'rate-limited' : 'ok', percent: Math.min(100, Math.round((w.used / w.cap) * 100)), resetsAt: at(w.resetAt) }
+    : undefined);
+  const wl = c?.windowLimits || {}, cr = c?.credits || {};
+  const windows = { rolling: win(wl.fiveHour), weekly: win(wl.weekly) };
+  const left = (+cr.monthlyCredits || 0) + (+cr.purchasedCredits || 0) + (+cr.freeCredits || 0);
+  return {
+    ...((windows.rolling || windows.weekly) && { windows }),
+    balance_infos: [{ total_balance: +left.toFixed(2), currency: `credits${cr.planId ? ` (${cr.planId})` : ''}` }],
+  };
+}
+
 // Account balance / limits straight from the provider, or from the key's own usage URL (a gateway's).
 // Returns null when there is no such API.
 async function fetchAccount(provider, key, sessionId, usageUrl, baseUrl) {
@@ -174,6 +192,13 @@ async function fetchAccount(provider, key, sessionId, usageUrl, baseUrl) {
       const r = await get('https://opencode.ai/zen/go/v1/usage', { 'User-Agent': 'omp-chat-vscode', 'x-opencode-session': sessionId || 'omp-chat' });
       return { provider, windows: r.usage };
     }
+    if (provider === 'commandcode') {
+      // Undocumented account routes the Command Code CLI (and omp) call with the same key; credits are per org.
+      const data = (j) => (j?.data && typeof j.data === 'object' ? j.data : j);
+      const orgId = data(await get('https://api.commandcode.ai/alpha/whoami'))?.org?.id;
+      const c = data(await get(`https://api.commandcode.ai/alpha/billing/credits${orgId ? `?orgId=${encodeURIComponent(orgId)}` : ''}`));
+      return { provider, ...commandCodeAccount(c) };
+    }
   } catch (e) {
     return { provider, error: e.message };
   }
@@ -191,6 +216,7 @@ const PROBE_URLS = {
   mistral: 'https://api.mistral.ai/v1/models',
   groq: 'https://api.groq.com/openai/v1/models',
   moonshot: 'https://api.moonshot.ai/v1/models',
+  commandcode: 'https://api.commandcode.ai/alpha/whoami', // its /models answers 200 to any key
   'opencode-go': 'https://opencode.ai/zen/go/v1/usage',
   'opencode-zen': 'https://opencode.ai/zen/v1/models',
   ollama: 'http://localhost:11434/v1/models',

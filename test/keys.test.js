@@ -63,4 +63,18 @@ const ctx = { secrets: { get: async (k) => sec.get(k), store: async (k, v) => se
   global.fetch = async () => ({ ok: false, status: 404, statusText: 'Not Found', text: async () => '{"error":"Not found"}' });
   assert.deepStrictEqual(await keys.fetchAccount('anthropic', 'k', 's', gw.usageUrl), { provider: 'anthropic', error: '404 Not Found — {"error":"Not found"}' });
   assert.strictEqual(await keys.fetchAccount('anthropic', 'k', 's'), null, 'no usage URL: no API');
+  // Command Code: whoami gives the org, its credits become plan windows + a balance line
+  const urls = [];
+  global.fetch = async (url) => { urls.push(url); return { ok: true, json: async () => (url.includes('whoami')
+    ? { user: { id: 'u1' }, org: { id: 'o 1' } }
+    : { data: { credits: { monthlyCredits: 4.5, purchasedCredits: 1, freeCredits: 0.004, planId: 'pro' },
+      windowLimits: { fiveHour: { used: 3, cap: 4, resetAt: 1800000000, exceeded: false }, weekly: { used: 10, cap: 10, resetAt: 1800000000000, exceeded: true } } } }) }; };
+  const cc = await keys.fetchAccount('commandcode', 'user_k', 's');
+  assert.strictEqual(urls[1], 'https://api.commandcode.ai/alpha/billing/credits?orgId=o%201');
+  assert.deepStrictEqual(cc.windows, { rolling: { status: 'ok', percent: 75, resetsAt: '2027-01-15T08:00:00.000Z' },
+    weekly: { status: 'rate-limited', percent: 100, resetsAt: '2027-01-15T08:00:00.000Z' } });
+  assert.deepStrictEqual(cc.balance_infos, [{ total_balance: 5.5, currency: 'credits (pro)' }]);
+  global.fetch = async (url) => ({ ok: true, json: async () => (url.includes('whoami') ? { user: { id: 'u1' } } : { credits: { purchasedCredits: 2 } }) });
+  const payg = await keys.fetchAccount('commandcode', 'user_k', 's');
+  assert(!payg.windows, 'pay-as-you-go: no windows'); assert.strictEqual(payg.balance_infos[0].total_balance, 2);
 })().catch((e) => { console.error(e); process.exit(1); });

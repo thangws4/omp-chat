@@ -1746,11 +1746,12 @@
     }
 
     if (a?.provider) {
-      const names = { openrouter: 'OpenRouter account', deepseek: 'DeepSeek account', 'opencode-go': 'OpenCode Go plan', 'opencode-zen': 'OpenCode Zen' };
+      const names = { openrouter: 'OpenRouter account', deepseek: 'DeepSeek account', 'opencode-go': 'OpenCode Go plan', 'opencode-zen': 'OpenCode Zen', commandcode: 'Command Code account' };
       const acc = section(panel, a.custom ? 'Gateway usage' : names[a.provider] || a.provider);
       if (a.custom) gatewayUsage(acc, a);
       else if (a.windows) {
         for (const [k, label] of WINDOWS) windowLine(acc, label, a.windows[k]);
+        for (const b of a.balance_infos || []) line(acc, 'Balance', `${b.total_balance} ${b.currency}`); // Command Code plans
       } else if (a.noApi) {
         note(acc, 'This provider has no usage API; limits show up as errors when reached.');
       } else if (a.needKey) {
