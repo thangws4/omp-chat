@@ -1516,7 +1516,8 @@ class ChatProvider {
             // Drop omp's debug-log path; turn a link in the message (settings, billing…) into a button.
             const shown = (r.message.errorMessage || 'Model request failed').replace(/\s*raw-http-request=\S+/g, '');
             const link = /https?:\/\/[^\s)]+/.exec(shown)?.[0]?.replace(/[.,;]+$/, '');
-            const linkLabel = !link ? null : /privacy|region/i.test(link) ? 'Open privacy settings' : /billing|credit/i.test(link) ? 'Top up' : 'Open link';
+            const linkLabel = !link ? null : /privacy|region/i.test(link) ? 'Open privacy settings' : /upgrade/i.test(shown) ? 'Upgrade plan'
+              : /billing|credit/i.test(link) ? 'Top up' : 'Open link';
             this.post({ type: 'error', text: shown + hint, actions: link ? [{ label: linkLabel, cmd: 'openUrl', arg: link }] : undefined });
             // Decide what to offer once omp has given up on its own retries (agent_end).
             const msg = r.message.errorMessage || '';
@@ -1532,7 +1533,8 @@ class ChatProvider {
               const prov = (this.modelName || '').split('/')[0];
               if (prov) this.context.globalState?.update(`ompChat.freeBlock.${prov}`, Date.now() + ms);
             }
-            else if (r.message.errorStatus === 403 && /subscription/i.test(msg)) this.blocked = { kind: 'plan' };
+            // a plan without this model or without API access at all (Command Code's Go plan: upgrade_required)
+            else if (r.message.errorStatus === 403 && /subscription|upgrade_required|API access/i.test(msg)) this.blocked = { kind: 'plan', link };
             else if (keys.isQuotaError(r.message.errorStatus, msg)) { // try the next key
               this.quotaHit = true;
               // Out of money (402 / "insufficient balance") reads differently from a rate limit at the end.
@@ -2345,6 +2347,11 @@ class ChatProvider {
       this.post({ type: 'error', text: `The free allowance for ${model} is used up${b.wait ? ` (it resets in about ${b.wait})` : ''}. `
         + 'Other keys of the same account share it, so OMP Chat did not switch keys. Pick another model to keep going in this conversation.',
         actions: [{ label: 'Choose another model', cmd: 'pickModel' }, { label: 'Usage & limits', cmd: 'usage' }] });
+    } else if (b.link) { // the provider names its upgrade page (Command Code: commandcode.ai/billing)
+      const who = keys.providerOf(this.modelName)?.label || 'this provider';
+      this.post({ type: 'error', text: `Your ${who} plan does not cover ${model}. Pick a model from another provider to keep going in this conversation, `
+        + 'or upgrade the plan and keep this model.',
+        actions: [{ label: 'Choose another model', cmd: 'pickModel' }, { label: `Open ${b.link.replace(/^https?:\/\//, '')}`, cmd: 'openUrl', arg: b.link }] });
     } else {
       this.post({ type: 'error', text: `${model} needs an OpenCode Go subscription. Pick another model, or subscribe and keep this model.`,
         actions: [{ label: 'Choose another model', cmd: 'pickModel' }, { label: 'Open opencode.ai/go', cmd: 'openUrl', arg: 'https://opencode.ai/go' }] });

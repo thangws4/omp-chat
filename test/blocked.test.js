@@ -18,6 +18,14 @@ provider.modelName = 'opencode-go/beam-free';
 fail(403, '403 An active OpenCode Go subscription is required to use OpenCode Go models. (type=permission_error)');
 card = posts.filter((p) => p.type === 'error').pop();
 assert(rotated === 0 && card.actions.some((a) => a.cmd === 'openUrl' && a.arg === 'https://opencode.ai/go'));
+// Command Code's $1 Go plan has no API access: say so, offer another model and the upgrade page, keep the keys
+provider.modelName = 'commandcode/deepseek/deepseek-v4.1-flash';
+fail(403, "403 Your Go plan doesn't include API access. Upgrade to Provider or higher at https://commandcode.ai/billing to use these endpoints. (type=permission_error param=upgrade_required)");
+const raw = posts.filter((p) => p.type === 'error').at(-2);
+card = posts.filter((p) => p.type === 'error').pop();
+assert(!raw.actions.some((a) => a.label === 'Top up'), 'an upgrade is not a top-up');
+assert(rotated === 0 && /Command Code/.test(card.text) && card.actions[0].cmd === 'pickModel'
+  && card.actions.some((a) => a.cmd === 'openUrl' && a.arg === 'https://commandcode.ai/billing'));
 // an ordinary 429 still rotates keys
 provider.modelName = 'deepseek/deepseek-flash'; fail(429, 'Rate limit exceeded');
 assert.strictEqual(rotated, 1);
