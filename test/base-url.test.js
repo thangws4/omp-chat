@@ -39,4 +39,22 @@ provider.ask = async (f) => { form = f; return answer; };
   k = (await keys.loadKeys(ctx, 'ANTHROPIC_API_KEY'))[0];
   assert(!('baseUrl' in k) && !('provider' in k));
   assert.strictEqual(restarts, 2);
+
+  // The extension omp loads: a known provider only moves; "custom" (OmniRoute, LiteLLM…) is declared whole,
+  // OpenAI-compatible, with its models read from {baseUrl}/models using the key.
+  const dir = require('fs').mkdtempSync(require('path').join(require('os').tmpdir(), 'omp-base-'));
+  provider.context.globalStorageUri = { fsPath: dir };
+  const [, file] = provider.baseUrlArgs({ anthropic: 'https://gw.local', custom: 'http://127.0.0.1:20128/v1' });
+  const calls = [];
+  (await import(require('url').pathToFileURL(file).href)).default({ registerProvider: (id, c) => calls.push([id, c]) });
+  assert.deepStrictEqual(calls[0], ['anthropic', { baseUrl: 'https://gw.local' }]);
+  const [id, c] = calls[1];
+  assert(id === 'custom' && c.api === 'openai-completions' && c.apiKey === 'CUSTOM_OPENAI_API_KEY');
+  let seen;
+  global.fetch = async (url, o) => { seen = [url, o.headers.Authorization]; return { ok: true, json: async () => ({ data: [{ id: 'auto' }, { id: 'kimi-k3', context_length: 262144 }, {}] }) }; };
+  const ms = await c.fetchDynamicModels('sk-omni');
+  assert.deepStrictEqual(seen, ['http://127.0.0.1:20128/v1/models', 'Bearer sk-omni']);
+  assert.deepStrictEqual(ms.map((m) => [m.id, m.contextWindow]), [['auto', 128000], ['kimi-k3', 262144]]);
+  global.fetch = async () => ({ ok: false, status: 401 });
+  await assert.rejects(c.fetchDynamicModels('bad'), /models answered 401/);
 })().catch((e) => { console.error(e); process.exit(1); });

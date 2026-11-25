@@ -1720,13 +1720,31 @@ class ChatProvider {
   }
 
   // Base URLs reach omp through a tiny extension (omp has no flag or env var that works for every provider).
+  // omp has no "custom" provider: that one is declared whole, OpenAI-compatible, its models read from {baseUrl}/models
+  // (OmniRoute, LiteLLM, vLLM, a local proxy…). A base URL alone would leave it with no models at all.
   baseUrlArgs(urls) {
     const dir = this.context.globalStorageUri?.fsPath;
     if (!Object.keys(urls).length || !dir) return [];
     try {
       fs.mkdirSync(dir, { recursive: true });
       const file = path.join(dir, 'omp-base-urls.js');
-      fs.writeFileSync(file, `export default function (pi) {\n  for (const [id, baseUrl] of Object.entries(${JSON.stringify(urls)})) pi.registerProvider(id, { baseUrl });\n}\n`);
+      fs.writeFileSync(file, `export default function (pi) {
+  for (const [id, baseUrl] of Object.entries(${JSON.stringify(urls)})) {
+    if (id !== 'custom') { pi.registerProvider(id, { baseUrl }); continue; }
+    pi.registerProvider(id, {
+      baseUrl, api: 'openai-completions', apiKey: 'CUSTOM_OPENAI_API_KEY',
+      fetchDynamicModels: async (key) => {
+        const r = await fetch(baseUrl + '/models', { headers: key ? { Authorization: 'Bearer ' + key } : {} });
+        if (!r.ok) throw new Error(baseUrl + '/models answered ' + r.status);
+        const free = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }; // ponytail: the endpoint states no prices or sizes
+        return ((await r.json()).data || []).filter((m) => m && m.id).map((m) => ({
+          id: m.id, name: m.name || m.id, reasoning: false, input: ['text', 'image'], cost: free,
+          contextWindow: m.context_length || m.context_window || 128000, maxTokens: 16384 }));
+      },
+    });
+  }
+}
+`);
       return ['-e', file];
     } catch (e) {
       this.post({ type: 'error', text: `Could not apply the base URL: ${e.message}` });
